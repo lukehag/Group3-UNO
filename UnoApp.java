@@ -21,6 +21,14 @@ class Card {
     public Type getType() { return type; }
     public int getValue() { return value; }
 
+    public boolean changeColor(Card.Color newColor) {
+        // If this card isn't black or the requested color is black there is an error
+        if (this.color != Card.Color.BLACK || newColor == Card.Color.BLACK) { return false; }
+
+        this.color = newColor;
+        return true;
+    }
+
     @Override
     public String toString() {
         if (type == Type.NUMBER) return color + " " + value;
@@ -121,6 +129,131 @@ class Hand {
 }
 
 // =======================
+// Generic Player Interface
+// =======================
+interface PlayerInterface {
+    String name = "Default";
+
+    Hand playerHand = new Hand();
+
+    Card playCard(int cardIndex);
+
+    void drawCard(Card newCard);
+
+    void takeTurn();
+}
+
+// =======================
+// Player Class
+// =======================
+class Player implements PlayerInterface {
+    public String name = "Player";
+    public boolean canPlay = true;
+    public Hand playerHand = new Hand();
+    
+    public Card playCard(int cardIndex) {
+        return playerHand.removeCard(cardIndex);
+    }
+
+    public void drawCard(Card newCard) {
+        playerHand.addCard(newCard);
+    }
+
+    public void takeTurn() {
+        System.out.println(this.name + "'s turn\n");
+    }
+
+    public boolean hasUno() {
+        if (playerHand.size() == 1) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    public boolean isOutOfCards() {
+        if (playerHand.size() == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    public void skipPlayer() { canPlay = false; }
+}
+
+// =======================
+// UNO Game Class
+// =======================
+class UnoGame {
+    public Deck DrawPile = new Deck();
+    public List<Card> DiscardPile = new ArrayList<>();
+    private List<Player> playerList = new ArrayList<>();
+    private int turnNumber = 0;
+
+    public void setupGame() {
+        // Initialize players
+        Player player = new Player();
+        Player opponent = new Player();
+
+        playerList.addAll(Arrays.asList(player, opponent));
+
+        // Deal 7 cards to each player
+        for (Player p : playerList) {
+            for (int i = 0; i < 7; i++) {
+                Card c = DrawPile.drawCard();
+
+                p.playerHand.addCard(c);
+            }
+        }
+
+        // Add card to the discard pile
+        DiscardPile.add(DrawPile.drawCard());
+    }
+
+    public void nextTurn() {
+        
+    }
+
+    public Player getNextPlayer() {
+        // Since there are 2 players right now, one player will take even turns and the other will take odds
+        int playerIndex = turnNumber % playerList.size();
+        playerIndex++;
+        return playerList.get(playerIndex);
+    }
+
+    public void applyCardEffects(Card card) {
+        // Get the next player then skip them
+        if (card.getType() == Card.Type.SKIP || card.getType() == Card.Type.REVERSE) {
+            getNextPlayer().skipPlayer();
+        }
+
+        // Get the next player then give them 2 cards from the draw pile then skip their turn
+        if (card.getType() == Card.Type.DRAW_TWO) {
+            for (int i = 0; i < 2; i++) {
+                getNextPlayer().playerHand.addCard(DrawPile.drawCard());
+            }
+            getNextPlayer().skipPlayer();
+        }
+
+        if (card.getColor() == Card.Color.BLACK) {
+            // ========TEMP========
+            // Right now the wild cards can only turn red
+            // Write code to prompt player input
+            // ========TEMP========
+            card.changeColor(Card.Color.RED);
+        }
+
+        if (card.getType() == Card.Type.WILD_DRAW_FOUR) {
+            for (int i = 0; i < 4; i++) {
+                getNextPlayer().playerHand.addCard(DrawPile.drawCard());
+            }
+            getNextPlayer().skipPlayer();
+        }
+    }
+}
+
+// =======================
 //  (Main)
 // =======================
 public class UnoApp {
@@ -140,5 +273,8 @@ public class UnoApp {
 
         System.out.println("\nRemaining cards in deck: " + deck.size());
         System.out.println("Remaining cards in hand: " + playerHand.size());
+
+        Card topCard = new Card(Card.Color.GREEN, Card.Type.WILD, -1);
+        System.out.println("Hand is playable: " + playerHand.hasPlayable(topCard));
     }
 }
