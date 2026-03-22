@@ -212,7 +212,8 @@ class UnoGame {
     }
 
     public void nextTurn() {
-        
+            // TODO Figure out how advancing turns work
+            turnNumber++;
     }
 
     public Player getNextPlayer() {
@@ -237,10 +238,7 @@ class UnoGame {
         }
 
         if (card.getColor() == Card.Color.BLACK) {
-            // ========TEMP========
-            // Right now the wild cards can only turn red
-            // Write code to prompt player input
-            // ========TEMP========
+            // TODO Right now the wild cards can only turn red. Write code to prompt player input
             card.changeColor(Card.Color.RED);
         }
 
