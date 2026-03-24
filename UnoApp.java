@@ -152,10 +152,12 @@ class Player implements PlayerInterface {
     public Hand playerHand = new Hand();
     
     public Card playCard(int cardIndex) {
+        if (!canPlay) { return null; }
         return playerHand.removeCard(cardIndex);
     }
 
     public void drawCard(Card newCard) {
+        if (!canPlay) { return; }
         playerHand.addCard(newCard);
     }
 
@@ -179,6 +181,7 @@ class Player implements PlayerInterface {
         }
     }
 
+    // Prevent the player from playing any cards
     public void skipPlayer() { canPlay = false; }
 }
 
@@ -212,14 +215,18 @@ class UnoGame {
     }
 
     public void nextTurn() {
-            // TODO Figure out how advancing turns work
-            turnNumber++;
+        // TODO Figure out how advancing turns work
+        turnNumber++;
+        getCurrentPlayer().takeTurn();
+    }
+
+    public Player getCurrentPlayer() {
+        return playerList.get(turnNumber % playerList.size());
     }
 
     public Player getNextPlayer() {
         // Since there are 2 players right now, one player will take even turns and the other will take odds
-        int playerIndex = turnNumber % playerList.size();
-        playerIndex++;
+        int playerIndex = (turnNumber + 1) % playerList.size();
         return playerList.get(playerIndex);
     }
 
