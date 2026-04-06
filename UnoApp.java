@@ -29,6 +29,22 @@ class Card {
         return true;
     }
 
+    public boolean isMatching(Card otherCard) {
+        // If the card is a black card it is playable
+        if (this.getColor() == Card.Color.BLACK) { return true; }
+
+        // If the cards have the same color it is playable
+        if (this.getColor() == otherCard.getColor()) { return true; }
+
+        // If the cards have the same value it is playable
+        if (this.getValue() == otherCard.getValue()) { return true; }
+
+        // If the cards have the same type and isn't a number it is playable
+        if (this.getType() == otherCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
+
+        return false;
+    }
+
     @Override
     public String toString() {
         if (type == Type.NUMBER) return color + " " + value;
@@ -108,24 +124,14 @@ class Hand {
     public boolean hasPlayable(Card topCard) {
         for (int i = 0; i < cardList.size(); i++) {
             Card currCard = cardList.get(i);
-            // If the hand has a black card it is playable
-            if (currCard.getColor() == Card.Color.BLACK) { return true; }
-
-            // If the hand has a card with the same color it is playable
-            if (currCard.getColor() == topCard.getColor()) { return true; }
-
-            if (currCard.getType() == topCard.getType()) {
-                // If the hand has a card with the same number it is playable
-                if (currCard.getType() == Card.Type.NUMBER) {
-                    if (currCard.getValue() == topCard.getValue()) { return true; }
-                } else {
-                    // If the hand has a card with the same type, and isn't a number card it is playable
-                    return true;
-                }
-            }
+            if (topCard.isMatching(currCard)) { return true; }
         }
         return false;
     }
+
+    public List<Card> getList() { return cardList; }
+
+    public Card getCard(int index) { return cardList.get(index); }
 }
 
 // =======================
@@ -140,29 +146,23 @@ interface PlayerInterface {
 
     void drawCard(Card newCard);
 
-    void takeTurn();
+    void changeCardColor(Card blackCard);
 }
 
 // =======================
 // Player Class
 // =======================
 class Player implements PlayerInterface {
-    public String name = "Player";
-    public boolean canPlay = true;
+    private String name = "Player";
+    public boolean isSkipped = false;
     public Hand playerHand = new Hand();
     
     public Card playCard(int cardIndex) {
-        if (!canPlay) { return null; }
         return playerHand.removeCard(cardIndex);
     }
 
     public void drawCard(Card newCard) {
-        if (!canPlay) { return; }
         playerHand.addCard(newCard);
-    }
-
-    public void takeTurn() {
-        System.out.println(this.name + "'s turn\n");
     }
 
     public boolean hasUno() {
@@ -182,7 +182,33 @@ class Player implements PlayerInterface {
     }
 
     // Prevent the player from playing any cards
-    public void skipPlayer() { canPlay = false; }
+    public void skipPlayer() { isSkipped = true; }
+
+    // Prompt user to change color
+    public void changeCardColor(Card blackCard) {
+        UnoApp.promptColorChange(blackCard);
+    }
+
+    @Override
+    public String toString() {
+        return name;
+    }
+}
+
+// =======================
+// Opponent Class
+// =======================
+class Opponent extends Player {
+    private String name = "Opponent";
+
+    public void takeTurn() {
+        
+    }
+
+    @Override
+    public String toString() {
+        return this.name;
+    }
 }
 
 // =======================
@@ -190,14 +216,15 @@ class Player implements PlayerInterface {
 // =======================
 class UnoGame {
     public Deck DrawPile = new Deck();
-    public List<Card> DiscardPile = new ArrayList<>();
+    private List<Card> DiscardPile = new ArrayList<>(); // The top card is at the end of the array
     private List<Player> playerList = new ArrayList<>();
     private int turnNumber = 0;
+    public boolean ongoing = true;
 
     public void setupGame() {
         // Initialize players
         Player player = new Player();
-        Player opponent = new Player();
+        Opponent opponent = new Opponent();
 
         playerList.addAll(Arrays.asList(player, opponent));
 
@@ -215,9 +242,20 @@ class UnoGame {
     }
 
     public void nextTurn() {
-        // TODO Figure out how advancing turns work
+        // Check if either player has an empty hand
+        for (int i = 0; i < playerList.size(); i++) {
+            Player currPlayer = playerList.get(i);
+            if (currPlayer.isOutOfCards()) {
+                finishGame(currPlayer);
+            }
+        }
         turnNumber++;
-        getCurrentPlayer().takeTurn();
+    }
+
+    public void finishGame(Player Winner) {
+        ongoing = false;
+        System.out.println(Winner + " won the game in " + turnNumber + " turns!");
+        System.exit(0);
     }
 
     public Player getCurrentPlayer() {
@@ -231,6 +269,9 @@ class UnoGame {
     }
 
     public void applyCardEffects(Card card) {
+        // If the card is a number card, do nothing
+        if (card.getType() == Card.Type.NUMBER) { return; }
+
         // Get the next player then skip them
         if (card.getType() == Card.Type.SKIP || card.getType() == Card.Type.REVERSE) {
             getNextPlayer().skipPlayer();
@@ -245,8 +286,7 @@ class UnoGame {
         }
 
         if (card.getColor() == Card.Color.BLACK) {
-            // TODO Right now the wild cards can only turn red. Write code to prompt player input
-            card.changeColor(Card.Color.RED);
+            getCurrentPlayer().changeCardColor(card);
         }
 
         if (card.getType() == Card.Type.WILD_DRAW_FOUR) {
@@ -256,30 +296,119 @@ class UnoGame {
             getNextPlayer().skipPlayer();
         }
     }
+
+    public Card getTopCard() { return DiscardPile.get(DiscardPile.size() - 1); }
+
+    public void setTopCard(Card newCard) { DiscardPile.add(newCard); }
 }
 
 // =======================
 //  (Main)
 // =======================
 public class UnoApp {
+    public static Scanner input = new Scanner(System.in);
     public static void main(String[] args) {
-        Deck deck = new Deck();
-        Hand playerHand = new Hand();
+        UnoGame Game = new UnoGame();
+        Game.setupGame();
 
-        System.out.println("Deck created with " + deck.size() + " cards.\n");
-        System.out.println("Drawing 7 cards...\n");
+        while (Game.ongoing) {
+            // Clear the console for the next turn
+            System.out.print("\033[H\033[2J");
+            System.out.flush();
 
-        for (int i = 0; i < 7; i++) {
-            Card c = deck.drawCard();
-            System.out.println("Card " + (i+1) + ": " + c);
+            Game.nextTurn();
 
-            playerHand.addCard(c);
+            switch (Game.getCurrentPlayer()) {
+                case Opponent o -> o.takeTurn();
+                case Player p -> playerTurn(Game);
+            }
         }
+        input.close();
+    }
 
-        System.out.println("\nRemaining cards in deck: " + deck.size());
-        System.out.println("Remaining cards in hand: " + playerHand.size());
+    public static void playerTurn(UnoGame Game) {
+        Player o = Game.getNextPlayer();
+        Player p = Game.getCurrentPlayer();
+        Card topCard = Game.getTopCard();
+        
+        System.out.println(o + " has " + o.playerHand.size() + " cards");
+        System.out.println("Top card: " + topCard + "\n");
 
-        Card topCard = new Card(Card.Color.GREEN, Card.Type.WILD, -1);
-        System.out.println("Hand is playable: " + playerHand.hasPlayable(topCard));
+        System.out.println("0: Skip turn");
+
+        // If player has been skipped, don't display any option other than skip turn
+        if (!p.isSkipped) {
+            int i = 1;
+            for (Card c : p.playerHand.getList()) {
+                System.out.println(i + ": " + c);
+                i++;
+            }
+        }
+        
+        while (true) {
+            if (!input.hasNextInt()) {
+                // Error handling for when a non-integer has been entered
+                System.out.println("Only numbers are accepted");
+                input.next();
+                continue;
+            }
+
+            int choice = input.nextInt(); 
+
+            // If player has been skipped, they can only choose to skip
+            if (p.isSkipped && choice != 0) {
+                System.out.println("You've been skipped, you must enter 0");
+                continue;
+            }
+
+            // Cannot choose numbers out of range
+            if (choice < 0 || choice > p.playerHand.size()) { 
+                System.out.println("Only numbers 0 to " + p.playerHand.size() + " are accepted");
+                continue;
+            }
+            
+            // If player chose to skip turn, exit the function
+            if (choice == 0) { return; }
+
+            Card currCard = p.playerHand.getCard(choice - 1); // Decrement to align with array indexes
+
+            if (currCard.isMatching(topCard)) {
+                Game.setTopCard(p.playCard(choice - 1));
+                Game.applyCardEffects(currCard);
+                return;
+            } else {
+                System.out.println("Cannot play that card");
+            }
+        }
+    }
+
+    public static void promptColorChange(Card blackCard) {
+        System.out.println("Pick a color: ");
+        System.out.println("1: Red \n2: Blue \n3: Yellow \n4: Green");
+
+        while (true) {
+            if (!input.hasNextInt()) {
+                // Error handling for when a non-integer has been entered
+                System.out.println("Only numbers are accepted");
+                input.next();
+                continue;
+            }
+
+            int choice = input.nextInt(); 
+
+            // Cannot choose numbers out of range
+            if (choice < 1 || choice > 4) { 
+                System.out.println("Only numbers 1 to 4 are accepted");
+                continue;
+            }
+
+            switch (choice) {
+                case 1 -> blackCard.changeColor(Card.Color.RED);
+                case 2 -> blackCard.changeColor(Card.Color.BLUE);
+                case 3 -> blackCard.changeColor(Card.Color.YELLOW);
+                case 4 -> blackCard.changeColor(Card.Color.GREEN);
+            }
+            return;
+        }
     }
 }
