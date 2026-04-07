@@ -37,12 +37,11 @@ class Card {
         // If the cards have the same color it is playable
         if (this.getColor() == topCard.getColor()) { return true; }
 
-        // If the cards have the same type and isn't a number it is playable
-        if (this.getType() == topCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
-
         // If the cards have the same value it is playable
         if (this.getValue() == topCard.getValue() && this.getValue() != -1) { return true; }
 
+        // If the cards have the same type and isn't a number it is playable
+        if (this.getType() == topCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
 
         return false;
     }
@@ -133,7 +132,7 @@ class Hand {
     public boolean hasPlayable(Card topCard) {
         for (int i = 0; i < cardList.size(); i++) {
             Card currCard = cardList.get(i);
-            if (topCard.isMatching(currCard)) { return true; }
+            if (currCard.isMatching(topCard)) { return true; }
         }
         return false;
     }
@@ -263,6 +262,8 @@ class UnoGame {
 
     // Checks for win condition and increments the turn counter
     public void nextTurn() {
+        getCurrentPlayer().isSkipped = false;
+
         // Check if either player has an empty hand
         for (int i = 0; i < playerList.size(); i++) {
             Player currPlayer = playerList.get(i);
@@ -360,10 +361,8 @@ public class UnoApp {
             System.out.print("\033[H\033[2J");
             System.out.flush();
 
-            Game.nextTurn();
-
             switch (Game.getCurrentPlayer()) {
-                case Opponent o -> o.takeTurn(Game);
+                case Opponent _ -> promptPlayer(Game);
                 case Player _ -> promptPlayer(Game);
             }
         }
@@ -375,6 +374,10 @@ public class UnoApp {
         Player o = Game.getNextPlayer();
         Player p = Game.getCurrentPlayer();
         Card topCard = Game.getTopCard();
+
+        while (!p.playerHand.hasPlayable(topCard)) {
+            p.drawCard(Game.DrawPile.drawCard());
+        }
         
         System.out.println(o + " has " + o.playerHand.size() + " cards");
         System.out.println("Top card: " + topCard + "\n");
@@ -413,17 +416,22 @@ public class UnoApp {
             }
             
             // If player chose to skip turn, exit the function
-            if (choice == 0) { return; }
+            if (choice == 0) { 
+                Game.nextTurn();
+                return;
+            }
 
             Card currCard = p.playerHand.getCard(choice - 1); // Decrement to align with array indexes
 
             if (currCard.isMatching(topCard)) {
                 Game.discardCard(p.playCard(choice - 1));
                 Game.applyCardEffects(currCard);
-                return;
             } else {
                 System.out.println("Cannot play that card");
+                continue;
             }
+            Game.nextTurn();
+            return;
         }
     }
 
