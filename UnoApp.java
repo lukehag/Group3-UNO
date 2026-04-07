@@ -37,11 +37,12 @@ class Card {
         // If the cards have the same color it is playable
         if (this.getColor() == topCard.getColor()) { return true; }
 
-        // If the cards have the same value it is playable
-        if (this.getValue() == topCard.getValue()) { return true; }
-
         // If the cards have the same type and isn't a number it is playable
         if (this.getType() == topCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
+
+        // If the cards have the same value it is playable
+        if (this.getValue() == topCard.getValue() && this.getValue() != -1) { return true; }
+
 
         return false;
     }
@@ -102,6 +103,11 @@ class Deck {
 
     public int size() {
         return cardList.size();
+    }
+
+    public void refillDeck(List<Card> DiscardPile) {
+        cardList = DiscardPile;
+        shuffle();
     }
 }
 
@@ -207,8 +213,15 @@ class Player implements PlayerInterface {
 class Opponent extends Player {
     private String name = "Opponent";
 
-    public void takeTurn() {
-        
+    public void takeTurn(UnoGame Game) {
+        //Card topCard = Game.getTopCard();
+    }
+
+    public boolean hasColor(Card.Color color) {
+        for (Card c : playerHand.getList()) {
+            if (c.getColor() == color) { return true; }
+        }
+        return false;
     }
 
     @Override
@@ -296,6 +309,7 @@ class UnoGame {
         // Get the next player then give them 2 cards from the draw pile then skip their turn
         if (card.getType() == Card.Type.DRAW_TWO) {
             for (int i = 0; i < 2; i++) {
+                checkDrawEmpty();
                 getNextPlayer().playerHand.addCard(DrawPile.drawCard());
             }
             getNextPlayer().skipPlayer();
@@ -307,6 +321,7 @@ class UnoGame {
 
         if (card.getType() == Card.Type.WILD_DRAW_FOUR) {
             for (int i = 0; i < 4; i++) {
+                checkDrawEmpty();
                 getNextPlayer().playerHand.addCard(DrawPile.drawCard());
             }
             getNextPlayer().skipPlayer();
@@ -317,6 +332,18 @@ class UnoGame {
 
     // Adds card to the DiscardPile
     public void discardCard (Card discarded) { DiscardPile.add(discarded); }
+
+    // If the draw pile is empty, take the DiscardPile and add it to the DrawPile then shuffle
+    // ALWAYS check before drawing
+    public void checkDrawEmpty() {
+        if (DrawPile.size() == 0) {
+            DrawPile.refillDeck(DiscardPile);
+            DiscardPile.clear();
+
+            // Add a card as the top card
+            DiscardPile.add(DrawPile.drawCard());
+        }
+    }
 }
 
 // =======================
@@ -336,15 +363,15 @@ public class UnoApp {
             Game.nextTurn();
 
             switch (Game.getCurrentPlayer()) {
-                case Opponent o -> o.takeTurn();
-                case Player _ -> playerTurn(Game);
+                case Opponent o -> o.takeTurn(Game);
+                case Player _ -> promptPlayer(Game);
             }
         }
         input.close();
     }
 
     // Acts as the driver for user input
-    public static void playerTurn(UnoGame Game) {
+    public static void promptPlayer(UnoGame Game) {
         Player o = Game.getNextPlayer();
         Player p = Game.getCurrentPlayer();
         Card topCard = Game.getTopCard();
