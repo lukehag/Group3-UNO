@@ -29,19 +29,19 @@ class Card {
         return true;
     }
 
-    // Checks if this card can be put into the discard pile
-    public boolean isMatching(Card topCard) {
+    // Checks if this card is compatible with the other card
+    public boolean isMatching(Card otherCard) {
         // If the card is a black card it is playable
-        if (this.getColor() == Card.Color.BLACK) { return true; }
+        if (this.getColor() == Card.Color.BLACK || otherCard.getColor() == Card.Color.BLACK) { return true; }
 
         // If the cards have the same color it is playable
-        if (this.getColor() == topCard.getColor()) { return true; }
+        if (this.getColor() == otherCard.getColor()) { return true; }
 
         // If the cards have the same value it is playable
-        if (this.getValue() == topCard.getValue() && this.getValue() != -1) { return true; }
+        if (this.getValue() == otherCard.getValue() && this.getValue() != -1) { return true; }
 
         // If the cards have the same type and isn't a number it is playable
-        if (this.getType() == topCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
+        if (this.getType() == otherCard.getType() && this.getType() != Card.Type.NUMBER) { return true; }
 
         return false;
     }
@@ -59,13 +59,8 @@ class Card {
 class Deck {
     private List<Card> cardList = new ArrayList<>();
 
-    public Deck() {
-        initializeDeck();
-        shuffle();
-    }
-
     // Populates the draw pile according to the UNO rules
-    private void initializeDeck() {
+    public Deck() {
         for (Card.Color c : Card.Color.values()) {
             if (c == Card.Color.BLACK) continue;
 
@@ -90,6 +85,8 @@ class Deck {
             cardList.add(new Card(Card.Color.BLACK, Card.Type.WILD, -1));
             cardList.add(new Card(Card.Color.BLACK, Card.Type.WILD_DRAW_FOUR, -1));
         }
+
+        shuffle();
     }
 
     public void shuffle() {
@@ -100,12 +97,11 @@ class Deck {
         return cardList.remove(cardList.size() - 1);
     }
 
-    public int size() {
-        return cardList.size();
-    }
+    public boolean isEmpty() { return cardList.size() == 0; }
 
-    public void refillDeck(List<Card> DiscardPile) {
+    public void repopulateDeck(List<Card> DiscardPile) {
         cardList = DiscardPile;
+        DiscardPile.clear();
         shuffle();
     }
 }
@@ -115,6 +111,10 @@ class Deck {
 // =======================
 class Hand {
     private List<Card> cardList = new ArrayList<>();
+
+    public List<Card> getList() { return cardList; }
+
+    public Card getCard(int index) { return cardList.get(index); }
 
     public void addCard(Card newCard) {
         cardList.add(newCard);
@@ -136,10 +136,6 @@ class Hand {
         }
         return false;
     }
-
-    public List<Card> getList() { return cardList; }
-
-    public Card getCard(int index) { return cardList.get(index); }
 }
 
 // =======================
@@ -164,8 +160,21 @@ interface PlayerInterface {
 // =======================
 class Player implements PlayerInterface {
     private String name = "Player";
-    public boolean isSkipped = false;
-    public Hand playerHand = new Hand();
+    private Hand playerHand = new Hand();
+    private boolean isSkipped = false;
+
+    public void skipPlayer() { isSkipped = true; }
+
+    public void resumePlayer() { isSkipped = false; }
+
+    public boolean isSkipped() { return isSkipped; }
+
+    public Hand getHand() { return playerHand; }
+
+    public boolean hasUno() { return playerHand.size() == 1; }
+
+    public boolean isOutOfCards() { return playerHand.size() == 0; } // Win condition
+
     
     public Card playCard(int cardIndex) {
         return playerHand.removeCard(cardIndex);
@@ -174,26 +183,6 @@ class Player implements PlayerInterface {
     public void drawCard(Card newCard) {
         playerHand.addCard(newCard);
     }
-
-    public boolean hasUno() {
-        if (playerHand.size() == 1) {
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    // Win condition
-    public boolean isOutOfCards() {
-        if (playerHand.size() == 0) {
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    // Prevents the player from playing any cards
-    public void skipPlayer() { isSkipped = true; }
 
     // Prompt user to change color
     public void changeCardColor(Card blackCard) {
@@ -213,11 +202,11 @@ class Opponent extends Player {
     private String name = "Opponent";
 
     public void takeTurn(UnoGame Game) {
-        //Card topCard = Game.getTopCard();
+        
     }
 
     public boolean hasColor(Card.Color color) {
-        for (Card c : playerHand.getList()) {
+        for (Card c : getHand().getList()) {
             if (c.getColor() == color) { return true; }
         }
         return false;
@@ -233,11 +222,11 @@ class Opponent extends Player {
 // UNO Game Class
 // =======================
 class UnoGame {
-    public Deck DrawPile = new Deck();
+    private Deck DrawPile = new Deck();
     private List<Card> DiscardPile = new ArrayList<>(); // The top card is at the end of the array
     private List<Player> playerList = new ArrayList<>();
     private int turnNumber = 0;
-    public boolean ongoing = true;
+    private boolean ongoing = true;
 
     // Initializes the playerList, deals cards to each player and adds a single card to the discard pile
     public UnoGame() {
@@ -252,7 +241,7 @@ class UnoGame {
             for (int i = 0; i < 7; i++) {
                 Card c = DrawPile.drawCard();
 
-                p.playerHand.addCard(c);
+                p.getHand().addCard(c);
             }
         }
 
@@ -260,9 +249,17 @@ class UnoGame {
         DiscardPile.add(DrawPile.drawCard());
     }
 
+    public Player getCurrentPlayer() { return playerList.get(turnNumber % playerList.size()); }
+
+    public Player getNextPlayer() { return playerList.get((turnNumber + 1) % playerList.size()); }
+
+    public Card getTopCard() { return DiscardPile.get(DiscardPile.size() - 1); }
+
+    public boolean isOngoing() { return ongoing; }
+
     // Checks for win condition and increments the turn counter
     public void nextTurn() {
-        getCurrentPlayer().isSkipped = false;
+        getCurrentPlayer().resumePlayer();
 
         // Check if either player has an empty hand
         for (int i = 0; i < playerList.size(); i++) {
@@ -286,18 +283,6 @@ class UnoGame {
         System.exit(0);
     }
 
-    // Determines current player based on the turn number
-    public Player getCurrentPlayer() {
-        return playerList.get(turnNumber % playerList.size());
-    }
-
-    public Player getNextPlayer() {
-        // Since there are 2 players right now, one player will take even turns and the other will take odds
-        int playerIndex = (turnNumber + 1) % playerList.size();
-        return playerList.get(playerIndex);
-    }
-
-    // If the card has an effect, it will be applied
     public void applyCardEffects(Card card) {
         // If the card is a number card, do nothing
         if (card.getType() == Card.Type.NUMBER) { return; }
@@ -311,7 +296,7 @@ class UnoGame {
         if (card.getType() == Card.Type.DRAW_TWO) {
             for (int i = 0; i < 2; i++) {
                 checkDrawEmpty();
-                getNextPlayer().playerHand.addCard(DrawPile.drawCard());
+                getNextPlayer().getHand().addCard(DrawPile.drawCard());
             }
             getNextPlayer().skipPlayer();
         }
@@ -323,26 +308,24 @@ class UnoGame {
         if (card.getType() == Card.Type.WILD_DRAW_FOUR) {
             for (int i = 0; i < 4; i++) {
                 checkDrawEmpty();
-                getNextPlayer().playerHand.addCard(DrawPile.drawCard());
+                getNextPlayer().getHand().addCard(DrawPile.drawCard());
             }
             getNextPlayer().skipPlayer();
         }
     }
 
-    public Card getTopCard() { return DiscardPile.get(DiscardPile.size() - 1); }
-
-    // Adds card to the DiscardPile
-    public void discardCard (Card discarded) { DiscardPile.add(discarded); }
+    // Draws a card from the DrawPile
+    public Card takeCard() { 
+        checkDrawEmpty();
+        return DrawPile.drawCard();
+    } 
+    public void discardCard(Card discarded) { DiscardPile.add(discarded); } // Adds card to the DiscardPile
 
     // If the draw pile is empty, take the DiscardPile and add it to the DrawPile then shuffle
-    // ALWAYS check before drawing
-    public void checkDrawEmpty() {
-        if (DrawPile.size() == 0) {
-            DrawPile.refillDeck(DiscardPile);
-            DiscardPile.clear();
-
-            // Add a card as the top card
-            DiscardPile.add(DrawPile.drawCard());
+    private void checkDrawEmpty() {
+        if (DrawPile.isEmpty()) {
+            DrawPile.repopulateDeck(DiscardPile);
+            DiscardPile.add(DrawPile.drawCard()); // Add a card as the top card
         }
     }
 }
@@ -356,10 +339,12 @@ public class UnoApp {
         UnoGame Game = new UnoGame();
 
         // Loops between both players' turns until one wins
-        while (Game.ongoing) {
+        while (Game.isOngoing()) {
             // Clear the console for the next turn
             System.out.print("\033[H\033[2J");
             System.out.flush();
+
+            Game.nextTurn();
 
             switch (Game.getCurrentPlayer()) {
                 case Opponent _ -> promptPlayer(Game);
@@ -371,23 +356,23 @@ public class UnoApp {
 
     // Acts as the driver for user input
     public static void promptPlayer(UnoGame Game) {
-        Player o = Game.getNextPlayer();
-        Player p = Game.getCurrentPlayer();
+        Player next = Game.getNextPlayer();
+        Player curr = Game.getCurrentPlayer();
         Card topCard = Game.getTopCard();
 
-        while (!p.playerHand.hasPlayable(topCard)) {
-            p.drawCard(Game.DrawPile.drawCard());
+        while (!curr.getHand().hasPlayable(topCard)) {
+            curr.drawCard(Game.takeCard());
         }
         
-        System.out.println(o + " has " + o.playerHand.size() + " cards");
+        System.out.println(next + " has " + next.getHand().size() + " cards");
         System.out.println("Top card: " + topCard + "\n");
 
         System.out.println("0: -Skip turn-");
 
         // If player has been skipped, don't display any option other than skip turn
-        if (!p.isSkipped) {
+        if (!curr.isSkipped()) {
             int i = 1;
-            for (Card c : p.playerHand.getList()) {
+            for (Card c : curr.getHand().getList()) {
                 System.out.println(i + ": " + c);
                 i++;
             }
@@ -404,33 +389,29 @@ public class UnoApp {
             int choice = input.nextInt(); 
 
             // If player has been skipped, they can only choose to skip
-            if (p.isSkipped && choice != 0) {
+            if (curr.isSkipped() && choice != 0) {
                 System.out.println("You've been skipped, you must enter 0");
                 continue;
             }
 
             // Cannot choose numbers out of range
-            if (choice < 0 || choice > p.playerHand.size()) { 
-                System.out.println("Only numbers 0 to " + p.playerHand.size() + " are accepted");
+            if (choice < 0 || choice > curr.getHand().size()) { 
+                System.out.println("Only numbers 0 to " + curr.getHand().size() + " are accepted");
                 continue;
             }
             
             // If player chose to skip turn, exit the function
-            if (choice == 0) { 
-                Game.nextTurn();
-                return;
-            }
+            if (choice == 0) { return; }
 
-            Card currCard = p.playerHand.getCard(choice - 1); // Decrement to align with array indexes
+            Card currCard = curr.getHand().getCard(choice - 1); // Decrement to align with array indexes
 
             if (currCard.isMatching(topCard)) {
-                Game.discardCard(p.playCard(choice - 1));
+                Game.discardCard(curr.playCard(choice - 1));
                 Game.applyCardEffects(currCard);
             } else {
                 System.out.println("Cannot play that card");
                 continue;
             }
-            Game.nextTurn();
             return;
         }
     }
