@@ -343,7 +343,12 @@ class UnoGame {
         Player player = new Player();
         Opponent opponent = new Opponent();
 
-        playerList.addAll(Arrays.asList(player, opponent));
+        // Decide who goes first
+        Random r = new Random();
+        boolean playerFirst = (1 == r.nextInt(2));
+
+        if (playerFirst) { playerList.addAll(Arrays.asList(opponent, player)); }
+        else { playerList.addAll(Arrays.asList(player, opponent)); }
 
         // Deal 7 cards to each player
         for (Player p : playerList) {
