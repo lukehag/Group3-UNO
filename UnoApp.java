@@ -328,6 +328,14 @@ class Opponent extends Player {
 }
 
 // =======================
+// Color Change Callback
+// (used by UnoServer API)
+// =======================
+interface ColorChangeCallback {
+    void onColorChangeNeeded(Card blackCard);
+}
+
+// =======================
 // UNO Game Class
 // =======================
 class UnoGame {
@@ -336,9 +344,23 @@ class UnoGame {
     private List<Player> playerList = new ArrayList<>();
     private int turnNumber = 0; // Player at index 1 starts first
     private boolean ongoing = true;
+    private ColorChangeCallback colorChangeCallback = null; // Set by UnoServer
+
+    public int getTurnNumber() { return turnNumber; }
+
+    // Constructor for UnoServer API — accepts a callback for color changes
+    public UnoGame(ColorChangeCallback cb) {
+        this.colorChangeCallback = cb;
+        init();
+    }
 
     // Initializes the playerList, deals cards to each player and adds a single card to the discard pile
     public UnoGame() {
+        init();
+    }
+
+    private void init() {
+        playerList.clear();
         // Initialize players
         Player player = new Player();
         Opponent opponent = new Opponent();
@@ -438,7 +460,12 @@ class UnoGame {
         }
 
         if (card.getColor() == Card.Color.BLACK) {
-            getCurrentPlayer().changeCardColor(card);
+            // Use API callback if available, otherwise fall back to console prompt
+            if (colorChangeCallback != null) {
+                colorChangeCallback.onColorChangeNeeded(card);
+            } else {
+                getCurrentPlayer().changeCardColor(card);
+            }
         }
 
         if (card.getType() == Card.Type.WILD_DRAW_FOUR) {
