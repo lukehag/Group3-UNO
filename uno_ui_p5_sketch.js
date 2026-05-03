@@ -1,24 +1,90 @@
 // ================================================================
-// UNO UI — p5.js sketch connected to UnoServer Java REST API
+// UNO UI — p5.js sketch
 // ================================================================
-// HOW TO USE:
-//   1. Start the Java server:  java UnoServer
-//   2. Open this sketch in a p5.js-compatible environment
-//      (e.g. editor.p5js.org, or a local index.html that loads p5.js)
-//   3. The UI will auto-connect and start a new game.
+// Use this file alongside an index.html that loads p5.js and sets
+// up the status bar. Your index.html should look like this:
 //
-// API base URL — change this if your server runs elsewhere
-const API = 'http://localhost:8080';
+//   <!DOCTYPE html>
+//   <html lang="en">
+//   <head>
+//     <meta charset="UTF-8" />
+//     <title>UNO</title>
+//     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js"></script>
+//     <style>
+//       * { margin:0; padding:0; box-sizing:border-box; }
+//       body { background:#0a1f1a; display:flex; flex-direction:column;
+//              align-items:center; justify-content:center; min-height:100vh;
+//              font-family:'Segoe UI',sans-serif; }
+//       canvas { display:block; border-radius:18px; box-shadow:0 8px 48px rgba(0,0,0,0.6); }
+//       #status-bar { width:1200px; max-width:98vw; display:flex; align-items:center;
+//                     justify-content:space-between; padding:8px 16px; margin-bottom:10px;
+//                     background:#0e2e26; border-radius:10px; color:#aaa; font-size:13px; }
+//       #conn-dot { width:10px; height:10px; border-radius:50%; background:#555;
+//                   display:inline-block; margin-right:8px; transition:background 0.3s; }
+//       #conn-dot.connected    { background:#4caf50; box-shadow:0 0 6px #4caf50; }
+//       #conn-dot.disconnected { background:#f44336; box-shadow:0 0 6px #f44336; }
+//       #conn-dot.waiting      { background:#ff9800; box-shadow:0 0 6px #ff9800; }
+//       #server-url-form { display:flex; gap:8px; align-items:center; }
+//       #server-url-form input { background:#1a3d33; border:1px solid #2e6050; color:#fff;
+//                                padding:4px 10px; border-radius:6px; font-size:12px; width:220px; }
+//       #server-url-form button { background:#1e6b50; color:#fff; border:none;
+//                                 padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px; }
+//       #server-url-form button:hover { background:#27886a; }
+//     </style>
+//   </head>
+//   <body>
+//     <div id="status-bar">
+//       <div>
+//         <span id="conn-dot" class="waiting"></span>
+//         <span id="conn-label">Connecting to UNO server...</span>
+//       </div>
+//       <form id="server-url-form" onsubmit="return false;">
+//         <label style="color:#888">Server:</label>
+//         <input id="api-input" type="text" value="http://localhost:8080" />
+//         <button onclick="reconnect()">Connect</button>
+//       </form>
+//     </div>
+//     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js"></script>
+//     <script src="uno_ui_p5_sketch.js"></script>
+//   </body>
+//   </html>
+// ================================================================
 
-// ── Game state (populated from API) ─────────────────────────────
-let state = null;           // Full state JSON from server
-let errorMsg = '';          // Display error feedback to player
-let loadingMsg = '';        // e.g. "Opponent thinking..."
-let colorPickerOpen = false;// True when wild color picker is shown
-let hoveredCardIdx = -1;    // Which card in player's hand is hovered
-let unoFlash = 0;           // Counter for UNO! flash animation
+const getAPI = () => {
+  const el = document.getElementById('api-input');
+  return el ? el.value.replace(/\/$/, '') : 'http://localhost:8080';
+};
 
-// ── Colors matching Java Card.Color enum ────────────────────────
+function setStatus(st, msg) {
+  const dot   = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  if (dot)   dot.className = st;
+  if (label) label.textContent = msg;
+}
+
+function reconnect() { newGame(); }
+
+// ── Game state ───────────────────────────────────────────────────
+let state           = null;
+let errorMsg        = '';
+let loadingMsg      = '';
+let colorPickerOpen = false;
+let hoveredCardIdx  = -1;
+let unoFlash        = 0;
+let particles       = [];
+let winner          = null;  // 'player' | 'opponent' | null
+let winnerAnim      = 0;
+let opponentPeek    = null;  // card opponent is about to play
+let peekTimer       = 0;
+let skipAnim        = 0;     // counts up while skip screen is showing
+let skipTriggered   = false; // prevents endTurn firing multiple times
+let turnTimer       = 120;   // seconds remaining on player's turn
+let turnTimerActive = false; // only ticks during player's turn
+let oppSkipAnim     = 0;     // counts up when opponent's turn is skipped
+let prevOppSkipped  = false; // tracks previous skip state to detect transition
+let oppDrawAnim     = 0;     // counts up when opponent draws a card
+
+// ── Card colors matching Java Card.Color enum ────────────────────
 const CARD_COLORS = {
   RED:    [220, 55,  55],
   BLUE:   [55,  110, 240],
@@ -26,151 +92,257 @@ const CARD_COLORS = {
   YELLOW: [245, 200, 50],
   BLACK:  [30,  30,  40],
 };
-
 const COLOR_PICKER_OPTIONS = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
 
-// ── p5.js lifecycle ─────────────────────────────────────────────
+// ── p5.js lifecycle ──────────────────────────────────────────────
 function setup() {
-  createCanvas(1200, 700);
-  textFont('Arial');
+  let cnv = createCanvas(1200, 700);
+  cnv.style('max-width', '98vw');
+  textFont('Georgia');
   rectMode(CENTER);
-  newGame(); // Kick off a game on load
+  newGame();
 }
 
 function draw() {
-  if (!state) {
-    drawLoading();
-    return;
-  }
-
+  if (!state) { drawLoading(); return; }
   drawBackground();
+  updateParticles();
   drawTopBar();
   drawOpponent();
   drawCenterArea();
   drawPlayerHand();
   drawUnoButton();
-
   if (colorPickerOpen) drawColorPicker();
   if (errorMsg)        drawError();
   if (loadingMsg)      drawLoadingOverlay();
   if (unoFlash > 0)    drawUnoFlash();
+  if (opponentPeek)    drawOpponentPeek();
+  if (skipAnim > 0)    drawSkipAnimation();
+  if (oppSkipAnim > 0) drawOpponentSkipAnimation();
+  if (oppDrawAnim > 0) drawOpponentDrawAnimation();
+  if (winner)          drawWinScreen();
+
+  // Draw timer when it's the player's turn
+  let isActiveTurn = state && (state.status === 'YOUR_TURN' || state.status === 'HAS_DRAWN');
+  if (isActiveTurn && !winner && !colorPickerOpen) drawTurnTimer();
+
+  // Tick the timer — p5 runs at 60fps so decrement every 60 frames
+  if (isActiveTurn && !winner && !colorPickerOpen) {
+    turnTimerActive = true;
+    if (frameCount % 60 === 0 && turnTimer > 0) {
+      turnTimer--;
+      if (turnTimer <= 0) {
+        turnTimer = 0;
+        // Time's up — end turn or skip
+        if (state.status === 'HAS_DRAWN') endTurn();
+        else if (state.status === 'YOUR_TURN') {
+          // Draw a card then end turn
+          apiPost('/draw-card', {}, s => {
+            state = s; errorMsg = '';
+            if (!s.ongoing) { detectWinner(s); return; }
+            endTurn();
+          });
+        }
+      }
+    }
+  } else {
+    // Reset timer whenever it's not the player's active turn
+    if (turnTimerActive) {
+      turnTimer = 120;
+      turnTimerActive = false;
+    }
+  }
+
+  // Auto-trigger skip animation when state becomes SKIPPED
+  if (state && state.status === 'SKIPPED' && !skipTriggered) {
+    skipTriggered = true;
+    skipAnim = 1;
+    setTimeout(() => {
+      skipAnim = 0;
+      skipTriggered = false;
+      endTurn();
+    }, 2000);
+  }
 }
 
 // ── API calls ────────────────────────────────────────────────────
 function newGame() {
-  apiPost('/new-game', {}, (s) => { state = s; });
+  setStatus('waiting', 'Starting new game…');
+  winner = null; winnerAnim = 0;
+  errorMsg = ''; loadingMsg = '';
+  colorPickerOpen = false;
+  skipAnim = 0; skipTriggered = false;
+  turnTimer = 120; turnTimerActive = false;
+  oppSkipAnim = 0; prevOppSkipped = false;
+  oppDrawAnim = 0;
+  apiPost('/new-game', {}, s => {
+    state = s;
+    setStatus('connected', 'Connected · Game running');
+    spawnParticles(20);
+  }, () => setStatus('disconnected', 'Cannot reach server — is java UnoServer running?'));
 }
 
 function playCard(idx) {
-  if (!state || state.status !== 'YOUR_TURN') return;
-  apiPost('/play-card', { cardIndex: idx }, (s) => {
-    state = s;
-    errorMsg = '';
-    if (s.status === 'AWAITING_COLOR') colorPickerOpen = true;
-    else if (s.status === 'OPPONENT_TURN') doOpponentTurn();
+  if (!state || (state.status !== 'YOUR_TURN' && state.status !== 'HAS_DRAWN')) return;
+  apiPost('/play-card', { cardIndex: idx }, s => {
+    state = s; errorMsg = '';
+    spawnParticles(8);
+    if (!s.ongoing) { detectWinner(s); return; }
+    if (s.status === 'AWAITING_COLOR') { colorPickerOpen = true; return; }
+    peekThenCommit(s);
     checkUno(s);
-  }, (e) => { errorMsg = e; });
+  }, e => { errorMsg = e; });
 }
 
 function drawACard() {
-  if (!state || (state.status !== 'YOUR_TURN')) return;
-  apiPost('/draw-card', {}, (s) => { state = s; errorMsg = ''; });
+  if (!state || state.status !== 'YOUR_TURN') return;
+  apiPost('/draw-card', {}, s => {
+    state = s; errorMsg = '';
+    if (!s.ongoing) { detectWinner(s); return; }
+    // If no playable cards after drawing, auto-advance to opponent
+    if (s.status !== 'HAS_DRAWN') {
+      peekThenCommit(s);
+    }
+    // If HAS_DRAWN, player can choose to play the drawn card or click Skip Turn
+    // Check if drawn card is actually playable — if not, auto end turn
+    if (s.status === 'HAS_DRAWN') {
+      let hasPlayable = s.playerCards && s.playerCards.some(c => c.playable);
+      if (!hasPlayable) {
+        endTurn();
+      }
+    }
+  });
 }
 
 function endTurn() {
   if (!state) return;
   if (state.status !== 'HAS_DRAWN' && state.status !== 'SKIPPED') return;
+  turnTimer = 120; turnTimerActive = false;
   loadingMsg = 'Opponent thinking…';
-  apiPost('/end-turn', {}, (s) => {
-    state = s;
-    loadingMsg = '';
+  apiPost('/end-turn', {}, s => {
+    state = s; loadingMsg = '';
+    if (!s.ongoing) { detectWinner(s); return; }
+    peekThenCommit(s);
     checkUno(s);
   });
 }
 
-function chooseColor(color) {
+function chooseColor(colorName) {
   colorPickerOpen = false;
   loadingMsg = 'Applying wild card…';
-  apiPost('/choose-color', { color }, (s) => {
-    state = s;
-    loadingMsg = '';
+  apiPost('/choose-color', { color: colorName }, s => {
+    state = s; loadingMsg = '';
+    if (!s.ongoing) { detectWinner(s); return; }
+    peekThenCommit(s);
     checkUno(s);
   });
 }
 
-function doOpponentTurn() {
-  // The server handles the opponent move inside /end-turn.
-  // This is just a short auto-delay so the UI shows "Opponent thinking..."
-  loadingMsg = 'Opponent thinking…';
-  setTimeout(() => {
-    apiPost('/end-turn', {}, (s) => {
-      state = s;
-      loadingMsg = '';
-      checkUno(s);
+// Show the opponent's card for 1.5s then commit the move
+function peekThenCommit(s) {
+  if (!s.ongoing || s.isPlayerTurn) return;
+
+  fetch(getAPI() + '/peek-opponent')
+    .then(r => r.json())
+    .then(peek => {
+      if (!peek.pending) {
+        // No card to show — opponent either drew or was skipped
+        // Fetch state to find out which
+        fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
+          if (ns.isPlayerTurn) {
+            // Opponent was skipped — show notification for 3 seconds then hand over
+            oppSkipAnim = 1;
+            setTimeout(() => { state = ns; }, 3000);
+          } else {
+            // Opponent drew a card — show draw notification then commit
+            oppDrawAnim = 1;
+            setTimeout(() => {
+              state = ns;
+              oppDrawAnim = 0;
+            }, 2000);
+          }
+          prevOppSkipped = false;
+        });
+        return;
+      }
+      opponentPeek = peek.card;
+      peekTimer = 90;
+
+      setTimeout(() => {
+        opponentPeek = null;
+        peekTimer = 0;
+        apiPost('/commit-opponent', {}, ns => {
+          state = ns;
+          if (!ns.ongoing) { detectWinner(ns); return; }
+          checkUno(ns);
+        });
+      }, 1500);
     });
-  }, 900);
 }
 
 function checkUno(s) {
-  if (s.playerHasUno || s.opponentHasUno) unoFlash = 90;
+  if (s.playerHasUno) { unoFlash = 100; spawnParticles(30); }
 }
 
-// ── Generic HTTP helpers ─────────────────────────────────────────
+function detectWinner(s) {
+  winner = (s.opponentHandSize === 0) ? 'opponent' : 'player';
+  winnerAnim = 0;
+  spawnParticles(winner === 'player' ? 80 : 20);
+}
+
 function apiPost(path, body, onSuccess, onError) {
-  fetch(API + path, {
+  fetch(getAPI() + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
   .then(r => r.json())
   .then(data => {
-    if (data.error) { if (onError) onError(data.error); }
-    else            { onSuccess(data); }
+    if (data.error) { if (onError) onError(data.error); else errorMsg = data.error; }
+    else onSuccess(data);
   })
-  .catch(err => {
-    if (onError) onError('Network error: ' + err.message);
-    else errorMsg = 'Network error: ' + err.message;
+  .catch(() => {
+    let msg = 'Cannot reach server — make sure java UnoServer is running on port 8080';
+    if (onError) onError(msg);
+    else { errorMsg = msg; setStatus('disconnected', msg); }
   });
 }
 
-// ── Mouse interaction ────────────────────────────────────────────
+// ── Mouse ────────────────────────────────────────────────────────
 function mousePressed() {
   if (!state) return;
-
-  // Color picker buttons
-  if (colorPickerOpen) {
-    handleColorPickerClick();
+  if (winner) {
+    if (dist(mouseX, mouseY, width/2, height/2 + 148) < 80) newGame();
     return;
   }
-
-  // New game button (shown when game over)
+  if (colorPickerOpen) { handleColorPickerClick(); return; }
   if (!state.ongoing) {
-    if (dist(mouseX, mouseY, width / 2, height / 2 + 80) < 70) {
-      newGame();
-    }
+    if (dist(mouseX, mouseY, width/2, height/2 + 70) < 75) newGame();
     return;
   }
 
-  // Draw pile click → draw card
-  let centerY = height / 2 + 10;
-  if (dist(mouseX, mouseY, width / 2 - 120, centerY) < 55) {
-    if (state.status === 'YOUR_TURN')  drawACard();
-    if (state.status === 'HAS_DRAWN' || state.status === 'SKIPPED') endTurn();
-    return;
+  // Skip Turn button below timer — only when player has drawn
+  if (state.status === 'HAS_DRAWN') {
+    let cx = width/2 - 270, btnY = height/2 + 88;
+    if (dist(mouseX, mouseY, cx, btnY) < 52) { endTurn(); return; }
   }
 
-  // Player hand cards
+  let cy = height/2 + 10;
+  if (dist(mouseX, mouseY, width/2 - 120, cy) < 60) {
+    if (state.status === 'YOUR_TURN') drawACard();
+    // Do nothing if HAS_DRAWN — player already drew this turn
+    return;
+  }
   if (state.status === 'YOUR_TURN' || state.status === 'HAS_DRAWN') {
     let cards = state.playerCards;
     if (!cards) return;
-    let totalW = (cards.length - 1) * 85 + 80;
-    let startX = width / 2 - totalW / 2;
+    let totalW = (cards.length - 1) * 88 + 80;
+    let startX = width/2 - totalW/2;
     let y = height - 100;
     for (let i = 0; i < cards.length; i++) {
-      let x = startX + i * 85 + 40;
-      if (dist(mouseX, mouseY, x, y) < 50 && cards[i].playable) {
-        playCard(cards[i].index);
-        return;
+      let x = startX + i * 88 + 40;
+      if (dist(mouseX, mouseY, x, y) < 55 && cards[i].playable) {
+        playCard(cards[i].index); return;
       }
     }
   }
@@ -179,364 +351,751 @@ function mousePressed() {
 function mouseMoved() {
   if (!state || !state.playerCards) { hoveredCardIdx = -1; return; }
   let cards = state.playerCards;
-  let totalW = (cards.length - 1) * 85 + 80;
-  let startX = width / 2 - totalW / 2;
+  let totalW = (cards.length - 1) * 88 + 80;
+  let startX = width/2 - totalW/2;
   let y = height - 100;
   hoveredCardIdx = -1;
   for (let i = 0; i < cards.length; i++) {
-    let x = startX + i * 85 + 40;
-    if (dist(mouseX, mouseY, x, y) < 50) { hoveredCardIdx = i; break; }
+    let x = startX + i * 88 + 40;
+    if (dist(mouseX, mouseY, x, y) < 55) { hoveredCardIdx = i; break; }
   }
 }
 
 function handleColorPickerClick() {
-  let bx = width / 2, by = height / 2;
-  let offsets = [[-80, -40], [80, -40], [-80, 40], [80, 40]];
-  for (let i = 0; i < 4; i++) {
-    let px = bx + offsets[i][0];
-    let py = by + offsets[i][1];
-    if (dist(mouseX, mouseY, px, py) < 36) {
-      chooseColor(COLOR_PICKER_OPTIONS[i]);
-      return;
+  let px = width/2, py = height/2;
+  let positions = [
+    { name: 'RED',    ox: -120, oy: -38 },
+    { name: 'BLUE',   ox:  120, oy: -38 },
+    { name: 'GREEN',  ox: -120, oy:  88 },
+    { name: 'YELLOW', ox:  120, oy:  88 },
+  ];
+  for (let i = 0; i < positions.length; i++) {
+    let cx = px + positions[i].ox;
+    let cy = py + positions[i].oy;
+    if (dist(mouseX, mouseY, cx, cy) < 72) {
+      chooseColor(positions[i].name); return;
     }
   }
 }
 
-// ── Drawing helpers ──────────────────────────────────────────────
+// ── Particles ────────────────────────────────────────────────────
+function spawnParticles(n) {
+  for (let i = 0; i < n; i++) {
+    particles.push({
+      x: random(200, width-200), y: random(200, height-200),
+      vx: random(-3,3), vy: random(-4,-1),
+      life: 255, size: random(6,14),
+      col: random([[220,55,55],[55,110,240],[55,180,90],[245,200,50],[255,255,255]])
+    });
+  }
+}
 
+function updateParticles() {
+  noStroke();
+  for (let i = particles.length-1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.life -= 4;
+    fill(p.col[0], p.col[1], p.col[2], p.life);
+    ellipse(p.x, p.y, p.size * (p.life/255));
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ── Drawing ──────────────────────────────────────────────────────
 function drawLoading() {
-  background(18, 92, 74);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(24);
-  text('Connecting to UNO server…', width / 2, height / 2);
-  textSize(14);
-  text('Make sure UnoServer is running on localhost:8080', width / 2, height / 2 + 40);
+  background(14, 50, 40);
+  fill(255); textAlign(CENTER,CENTER); textSize(22);
+  text('Connecting to UNO server…', width/2, height/2);
+  fill(180); textSize(14);
+  text('Make sure UnoServer is running: java UnoServer', width/2, height/2+36);
 }
 
 function drawBackground() {
-  background(18, 92, 74);
+  background(16, 88, 70);
+  noStroke(); fill(12, 68, 54);
+  rect(width/2, height/2, 1130, 618, 36);
+  stroke(255, 8); strokeWeight(1);
+  for (let x = 0; x < width; x += 40) line(x, 75, x, height-30);
+  for (let y = 75; y < height-30; y += 40) line(60, y, width-60, y);
   noStroke();
-  fill(14, 74, 60);
-  rect(width / 2, height / 2, 1100, 600, 36);
 }
 
 function drawTopBar() {
-  let topCard = state.topCard;
-  let colorName = topCard ? topCard.color : 'GREEN';
-  let col = CARD_COLORS[colorName] || [100, 180, 100];
-
-  fill(col[0], col[1], col[2]);
-  rect(width / 2, 45, 1100, 60, 18);
-
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(18);
-  textStyle(BOLD);
-
-  let dirText = '↻ Clockwise';
-  let turnText = state.isPlayerTurn ? '  ·  Your Turn' : '  ·  Opponent\'s Turn';
-  let colorText = colorName + '  ·  ' + dirText + turnText;
-  text(colorText, width / 2, 45);
+  let top = state.topCard;
+  let col = top ? (CARD_COLORS[top.color] || [80,160,120]) : [40,130,100];
+  noStroke();
+  fill(col[0]*0.6, col[1]*0.6, col[2]*0.6);
+  rect(width/2, 44, 1110, 62, 16);
+  fill(col[0], col[1], col[2], 200);
+  rect(width/2, 44, 1110, 58, 14);
+  fill(255); textAlign(CENTER,CENTER); textSize(17); textStyle(BOLD);
+  let colorName = top ? top.color : '—';
+  let turnTxt = state.isPlayerTurn ? '  ·  ✦ Your Turn' : '  ·  Opponent\'s Turn';
+  text('⬤  ' + colorName + '    ↻ Clockwise' + turnTxt, width/2, 44);
   textStyle(NORMAL);
 }
 
 function drawOpponent() {
-  let y = 145;
+  let y = 148;
   let count = state.opponentHandSize || 0;
 
+  // Avatar circle with drawn robot face
+  fill(255, 230); noStroke(); ellipse(width/2, y-32, 52);
+  drawRobotFace(width/2, y-32, 38);
+
+  fill(255); textSize(15); textAlign(CENTER,CENTER);
+  text('Opponent', width/2, y+2);
+  stroke(255,90); line(width/2-100, y+14, width/2+100, y+14); noStroke();
+
+  let spacing = min(28, 520/max(count,1));
+  let sx = width/2 - ((count-1)*spacing)/2;
+  for (let i = 0; i < count; i++) drawCardBack(sx + i*spacing, y+50, 34, 50);
+
+  if (state.opponentHasUno) {
+    // Red UNO badge replaces the card count
+    let pulse = 0.5 + 0.5 * sin(frameCount * 0.12);
+    let bw = 70 + pulse * 6;
+
+    // Glow
+    fill(220, 50, 50, 60 + pulse * 40); noStroke();
+    ellipse(width/2, y+92, bw + 20, 36);
+
+    // Badge
+    fill(210, 35, 35); noStroke();
+    rect(width/2, y+92, bw, 28, 14);
+
+    // Text
+    fill(255); textSize(14); textStyle(BOLD);
+    text('UNO', width/2, y+92);
+    textStyle(NORMAL);
+  } else {
+    fill(255); textSize(13);
+    text(count + ' card' + (count!==1?'s':''), width/2, y+92);
+  }
+}
+
+// Drawn robot face using p5.js shapes
+function drawRobotFace(x, y, size) {
+  push(); translate(x, y);
+  let s = size / 38; // scale factor
+
+  // Head rectangle
+  fill(180, 195, 210); noStroke();
+  rect(0, 0, 28*s, 24*s, 5*s);
+
+  // Eyes
+  fill(40, 120, 220);
+  ellipse(-8*s, -3*s, 9*s, 7*s);
+  ellipse(8*s, -3*s, 9*s, 7*s);
+
+  // Eye shine
   fill(255);
-  ellipse(width / 2, y - 30, 50);
+  ellipse(-6*s, -4*s, 3*s, 3*s);
+  ellipse(10*s, -4*s, 3*s, 3*s);
 
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(16);
-  text('Opponent', width / 2, y);
-
-  stroke(255, 100);
-  line(width / 2 - 90, y + 12, width / 2 + 90, y + 12);
-  noStroke();
-
-  // Draw face-down cards
-  let spacing = min(26, 520 / max(count, 1));
-  let startX  = width / 2 - ((count - 1) * spacing) / 2;
-  for (let i = 0; i < count; i++) {
-    drawCardBack(startX + i * spacing, y + 48, 34, 50);
+  // Mouth — small rectangles like a grid
+  fill(60, 80, 100);
+  rect(0, 7*s, 18*s, 5*s, 2*s);
+  fill(140, 200, 255, 180);
+  for (let i = -2; i <= 2; i++) {
+    rect(i * 4*s, 7*s, 2*s, 4*s, 1);
   }
 
-  fill(255);
-  textSize(13);
-  let unoTag = state.opponentHasUno ? ' — UNO! 🔴' : '';
-  text(count + ' card' + (count !== 1 ? 's' : '') + unoTag, width / 2, y + 90);
+  // Antenna
+  fill(180, 195, 210);
+  rect(0, -14*s, 3*s, 8*s, 2);
+  fill(220, 80, 80);
+  ellipse(0, -18*s, 6*s, 6*s);
+
+  pop();
 }
 
 function drawCenterArea() {
-  let cx = width / 2;
-  let cy = height / 2 + 10;
-
-  // Draw pile
-  drawCardStack(cx - 120, cy);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(13);
-
-  // Label changes based on game status
-  if (state.status === 'SKIPPED')       text('SKIP TURN\n(click)', cx - 120, cy + 80);
-  else if (state.status === 'HAS_DRAWN') text('END TURN\n(click)', cx - 120, cy + 80);
-  else if (state.status === 'YOUR_TURN') text('DRAW\n(click)', cx - 120, cy + 80);
-  else                                   text('DRAW PILE', cx - 120, cy + 80);
-
-  // Discard pile — top card
+  let cx = width/2, cy = height/2 + 10;
+  drawCardStack(cx-120, cy);
+  fill(255); textAlign(CENTER,CENTER); textSize(12);
+  if      (state.status === 'YOUR_TURN') text('DRAW\n▶ click', cx-120, cy+82);
+  else if (state.status === 'HAS_DRAWN') { fill(255, 80); text('DRAW\n(used)', cx-120, cy+82); }
+  else                                   text('DRAW PILE',     cx-120, cy+82);
   let top = state.topCard;
   if (top) {
-    let col = CARD_COLORS[top.color] || [80, 80, 80];
-    drawUnoCard(cx + 120, cy, 90, 130, col, top.label);
+    let col = CARD_COLORS[top.color] || [80,80,80];
+    fill(0,0,0,60); noStroke(); rect(cx+124, cy+6, 94, 136, 14);
+    drawUnoCard(cx+120, cy, 90, 130, col, top.label);
   }
-  fill(255);
-  textSize(13);
-  text('DISCARD', cx + 120, cy + 80);
-
-  // Game over overlay
-  if (!state.ongoing) {
-    fill(0, 0, 0, 160);
-    rect(cx, cy, 360, 200, 20);
-    fill(255);
-    textSize(30);
-    textStyle(BOLD);
-    text(state.status === 'GAME_OVER' ? 'Game Over!' : 'Game Over!', cx, cy - 30);
-    textStyle(NORMAL);
-    textSize(16);
-    text('Click below to play again', cx, cy + 10);
-    // New game button
-    fill(220, 45, 45);
-    rect(cx, cy + 60, 160, 50, 25);
-    fill(255);
-    textSize(18);
-    textStyle(BOLD);
-    text('New Game', cx, cy + 60);
-    textStyle(NORMAL);
-  }
+  fill(255); textSize(12); text('DISCARD', cx+120, cy+82);
 }
 
 function drawUnoButton() {
-  if (unoFlash > 0) return; // replaced by flash anim
-
-  let active = state.playerHasUno || state.opponentHasUno;
-  fill(active ? color(255, 80, 80) : color(160, 40, 40));
-  rect(width / 2, height / 2 + 148, 130, 48, 24);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(22);
-  textStyle(BOLD);
-  text('UNO!', width / 2, height / 2 + 148);
+  if (!state.playerHasUno) return; // only show for player
+  if (unoFlash > 0) return;
+  fill(color(255, 70, 70));
+  noStroke(); rect(width/2, height/2+150, 128, 46, 23);
+  fill(255); textAlign(CENTER,CENTER); textSize(21); textStyle(BOLD);
+  text('UNO!', width/2, height/2+150);
   textStyle(NORMAL);
+}
+
+function drawTurnTimer() {
+  // Position closer to center — just left of the draw pile
+  let cx = width/2 - 270, cy = height/2;
+  let pct = turnTimer / 120;
+
+  // Always red, pulses faster when low
+  let pulse = (pct < 0.2) ? 0.5 + 0.5 * sin(frameCount * 0.25) : 1.0;
+  let timerRed = color(220, 55, 55);
+
+  // Background track
+  noFill(); stroke(255, 30); strokeWeight(6);
+  ellipse(cx, cy, 90, 90);
+
+  // Red arc
+  stroke(timerRed); strokeWeight(6);
+  arc(cx, cy, 90, 90, -HALF_PI, -HALF_PI + TWO_PI * pct);
+  noStroke();
+
+  // Dark center
+  fill(0, 0, 0, 160); ellipse(cx, cy, 76, 76);
+
+  // Number
+  fill(220, 55, 55, 255 * pulse);
+  textAlign(CENTER, CENTER);
+  textSize(pct < 0.2 ? 24 : 20); textStyle(BOLD);
+  text(turnTimer, cx, cy);
+  textStyle(NORMAL);
+
+  // Label
+  fill(255, 140); textSize(10);
+  text('seconds', cx, cy + 52);
+
+  // ── Skip Turn button — only when player has drawn ────────────
+  if (state.status === 'HAS_DRAWN') {
+    let btnY = cy + 88;
+    let hov = dist(mouseX, mouseY, cx, btnY) < 52;
+    fill(hov ? color(200, 45, 45) : color(150, 30, 30));
+    noStroke(); rect(cx, btnY, hov ? 106 : 100, hov ? 36 : 32, 16);
+    fill(255); textAlign(CENTER, CENTER); textSize(13); textStyle(BOLD);
+    text('Skip Turn', cx, btnY);
+    textStyle(NORMAL);
+  }
 }
 
 function drawPlayerHand() {
   let cards = state.playerCards;
   if (!cards || cards.length === 0) return;
-
   let y = height - 100;
-
-  // Hand background panel
-  let panelW = min(1060, cards.length * 85 + 120);
-  fill(255, 245);
-  rect(width / 2, y, panelW, 150, 28);
-
-  // Status label above panel
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(13);
-  let label = 'YOUR HAND';
-  if (state.status === 'SKIPPED')    label = 'YOUR HAND — You\'ve been skipped!';
-  if (state.status === 'HAS_DRAWN')  label = 'YOUR HAND — You drew. Play it or end turn.';
-  if (!state.isPlayerTurn)           label = 'YOUR HAND — Opponent\'s turn…';
-  text(label, width / 2, height - 18);
-
-  let totalW = (cards.length - 1) * 85 + 80;
-  let startX = width / 2 - totalW / 2;
-
+  let panelW = min(1080, cards.length * 88 + 130);
+  fill(0,0,0,50); noStroke(); rect(width/2+4, y+6, panelW, 154, 28);
+  fill(255,242); rect(width/2, y, panelW, 150, 28);
+  fill(40); textAlign(CENTER,CENTER); textSize(12); textStyle(BOLD);
+  let lbl = 'YOUR HAND';
+  if (state.status === 'SKIPPED')   lbl = 'YOUR HAND  —  You\'ve been skipped!';
+  if (state.status === 'HAS_DRAWN') lbl = 'YOUR HAND  —  Play the drawn card or end turn';
+  if (!state.isPlayerTurn)          lbl = 'YOUR HAND  —  Opponent\'s turn…';
+  text(lbl, width/2, height-17);
+  textStyle(NORMAL);
+  let totalW = (cards.length-1)*88 + 80;
+  let startX = width/2 - totalW/2;
   for (let i = 0; i < cards.length; i++) {
-    let x = startX + i * 85 + 40;
-    let hovered = (hoveredCardIdx === i);
+    let x = startX + i*88 + 40;
+    let hov = (hoveredCardIdx === i);
     let playable = cards[i].playable;
     let card = cards[i].card;
-    let col = CARD_COLORS[card.color] || [80, 80, 80];
-
-    let yOff = hovered && playable ? -18 : 0;
-
-    // Glow effect for playable cards
+    let col = CARD_COLORS[card.color] || [80,80,80];
+    let yOff = hov && playable ? -20 : 0;
     if (playable) {
       noFill();
-      stroke(255, 230, 100, hovered ? 200 : 100);
-      strokeWeight(hovered ? 3 : 1.5);
-      rect(x, y + yOff, 76, 116, 14);
+      stroke(255, 210, 80, hov ? 220 : 90);
+      strokeWeight(hov ? 4 : 2);
+      rect(x, y+yOff, 78, 118, 14);
       noStroke();
     }
-
-    drawUnoCard(x, y + yOff, 72, 110, col, card.label);
-
-    // Dim non-playable cards
+    fill(0,0,0,40); noStroke(); rect(x+3, y+yOff+5, 72, 110, 13);
+    drawUnoCard(x, y+yOff, 72, 110, col, card.label);
     if (!playable && state.status === 'YOUR_TURN') {
-      fill(0, 0, 0, 80);
-      noStroke();
-      rect(x, y + yOff, 72, 110, 14);
+      fill(0,0,0,90); noStroke(); rect(x, y+yOff, 72, 110, 13);
     }
   }
-
-  // UNO badge
   if (state.playerHasUno) {
-    fill(220, 45, 45);
-    rect(width / 2 + totalW / 2 + 50, y, 60, 32, 16);
-    fill(255);
-    textSize(14);
-    textStyle(BOLD);
-    text('UNO!', width / 2 + totalW / 2 + 50, y);
+    fill(220,45,45); noStroke();
+    rect(width/2 + totalW/2 + 55, y, 62, 30, 15);
+    fill(255); textSize(13); textStyle(BOLD);
+    text('UNO!', width/2 + totalW/2 + 55, y);
     textStyle(NORMAL);
   }
 }
 
-// ── Card drawing primitives ──────────────────────────────────────
+// ── Card primitives ──────────────────────────────────────────────
 function drawUnoCard(x, y, w, h, col, label) {
-  push();
-  translate(x, y);
-  noStroke();
+  push(); translate(x, y); noStroke();
 
   // White border
-  fill(255);
-  rect(0, 0, w, h, 13);
+  fill(255); rect(0, 0, w, h, 13);
 
   // Colored face
-  fill(col[0], col[1], col[2]);
-  rect(0, 0, w - 8, h - 8, 11);
+  fill(col[0],col[1],col[2]); rect(0,0,w-8,h-8,11);
 
-  // Oval
-  fill(255, 220);
-  ellipse(0, 0, w * 0.7, h * 0.5);
+  // Center oval
+  fill(255,210); ellipse(0,0,w*0.68,h*0.46);
 
-  // Center label
-  fill(col[0], col[1], col[2]);
-  textAlign(CENTER, CENTER);
-  textSize(label.length > 2 ? 18 : 24);
-  textStyle(BOLD);
-  text(label, 0, 2);
+  // Center label — scale with card size
+  fill(col[0],col[1],col[2]);
+  textAlign(CENTER,CENTER);
+  let centerSize = label.length > 2 ? w * 0.32 : w * 0.48;
+  textSize(centerSize); textStyle(BOLD);
+  text(label, 0, centerSize * 0.08);
   textStyle(NORMAL);
 
-  // Corner labels
-  textSize(11);
-  fill(255);
-  text(label, -w / 2 + 11, -h / 2 + 14);
-  text(label, w / 2 - 11, h / 2 - 14);
+  // Corner labels — scale with card size
+  let cornerSize = w * 0.18;
+  fill(255); textSize(cornerSize);
+  text(label, -w/2 + w*0.15, -h/2 + h*0.12);
+  text(label,  w/2 - w*0.15,  h/2 - h*0.12);
 
   pop();
 }
 
 function drawCardStack(x, y) {
-  for (let i = 2; i >= 0; i--) {
-    drawCardBack(x + i * 3, y - i * 3, 80, 120);
+  for (let i=2; i>=0; i--) drawCardBack(x+i*3, y-i*3, 80, 120);
+}
+
+function drawCardBack(x, y, w=80, h=120) {
+  push(); translate(x,y); noStroke();
+  fill(22,22,38); rect(0,0,w,h,13);
+  fill(190,35,35); rect(0,0,w-10,h-10,10);
+  fill(255,210); ellipse(0,0,w*0.6,h*0.35);
+  fill(255); textAlign(CENTER,CENTER);
+  textSize(w * 0.26); textStyle(BOLD);
+  text('UNO',0, w * 0.03); textStyle(NORMAL);
+  pop();
+}
+
+// ── Overlays ─────────────────────────────────────────────────────
+function drawColorPicker() {
+  // Dark backdrop
+  fill(0, 0, 0, 200); noStroke(); rect(width/2, height/2, width, height);
+
+  // Panel
+  let px = width/2, py = height/2;
+  fill(18, 28, 36); noStroke(); rect(px, py, 520, 400, 28);
+
+  // Panel border glow
+  noFill(); stroke(255, 255, 255, 30); strokeWeight(1.5);
+  rect(px, py, 524, 404, 30); noStroke();
+
+  // Title
+  fill(255); textAlign(CENTER, CENTER); textSize(26); textStyle(BOLD);
+  text('Choose a Color', px, py - 158);
+  textStyle(NORMAL);
+
+  // Subtitle
+  let topCard = state && state.topCard ? state.topCard : null;
+  let isPlus4 = topCard && topCard.label === '+4';
+  fill(180, 210, 200); textSize(14);
+  text(isPlus4 ? 'Wild Draw Four — pick the new active color'
+               : 'Wild Card — pick the new active color', px, py - 128);
+
+  // Four color tiles arranged in a 2x2 grid
+  let positions = [
+    { name: 'RED',    ox: -120, oy: -38 },
+    { name: 'BLUE',   ox:  120, oy: -38 },
+    { name: 'GREEN',  ox: -120, oy:  88 },
+    { name: 'YELLOW', ox:  120, oy:  88 },
+  ];
+
+  for (let i = 0; i < positions.length; i++) {
+    let opt  = positions[i];
+    let cx   = px + opt.ox;
+    let cy   = py + opt.oy;
+    let col  = CARD_COLORS[opt.name];
+    let hov  = dist(mouseX, mouseY, cx, cy) < 72;
+    let tw   = hov ? 148 : 136;
+    let th   = hov ? 100 : 92;
+
+    // Tile shadow
+    fill(0, 0, 0, 60); noStroke();
+    rect(cx + 4, cy + 6, tw, th, 18);
+
+    // Tile background
+    fill(col[0] * 0.55, col[1] * 0.55, col[2] * 0.55);
+    rect(cx, cy, tw, th, 16);
+    fill(col[0], col[1], col[2]);
+    rect(cx, cy, tw - 6, th - 6, 14);
+
+    // Shine overlay
+    fill(255, 255, 255, hov ? 40 : 22);
+    rect(cx, cy - th/4, tw - 6, th/2, 14, 14, 0, 0);
+
+    // Hover border
+    if (hov) {
+      noFill(); stroke(255, 255, 255, 200); strokeWeight(3);
+      rect(cx, cy, tw, th, 16); noStroke();
+    }
+
+    // Draw the color's icon inside each tile
+    drawColorIcon(cx, cy, opt.name, col, hov);
+
+    // Color name label below icon
+    fill(255); textAlign(CENTER, CENTER); textSize(hov ? 15 : 13); textStyle(BOLD);
+    text(opt.name, cx, cy + th/2 - 14);
+    textStyle(NORMAL);
   }
 }
 
-function drawCardBack(x, y, w = 80, h = 120) {
-  push();
-  translate(x, y);
+// Draws a unique icon for each color inside its picker tile
+function drawColorIcon(x, y, name, col, hov) {
+  push(); translate(x, y - 8);
+  let s = hov ? 1.1 : 1.0;
+  scale(s);
   noStroke();
 
-  fill(30, 30, 48);
-  rect(0, 0, w, h, 13);
+  if (name === 'RED') {
+    // Flame shape
+    fill(255, 220, 60);
+    ellipse(0, 4, 22, 28);
+    fill(255, 140, 30);
+    ellipse(-6, 8, 14, 20);
+    ellipse(6, 6, 14, 22);
+    fill(220, 50, 50);
+    ellipse(0, 0, 18, 26);
+    fill(255, 180, 80, 180);
+    ellipse(0, -2, 8, 16);
 
-  fill(200, 40, 40);
-  rect(0, 0, w - 10, h - 10, 10);
+  } else if (name === 'BLUE') {
+    // Water drop
+    fill(120, 180, 255);
+    beginShape();
+    vertex(0, -22);
+    bezierVertex(18, -8, 20, 8, 0, 20);
+    bezierVertex(-20, 8, -18, -8, 0, -22);
+    endShape(CLOSE);
+    fill(255, 255, 255, 120);
+    ellipse(-5, -6, 7, 12);
 
-  fill(255, 220);
-  ellipse(0, 0, w * 0.6, h * 0.35);
+  } else if (name === 'GREEN') {
+    // Leaf shape
+    fill(80, 200, 80);
+    beginShape();
+    vertex(0, -22);
+    bezierVertex(22, -10, 22, 14, 0, 20);
+    bezierVertex(-22, 14, -22, -10, 0, -22);
+    endShape(CLOSE);
+    // Stem
+    fill(60, 150, 60);
+    rect(0, 14, 4, 12, 2);
+    // Vein
+    stroke(60, 160, 60, 180); strokeWeight(1.5);
+    line(0, -18, 0, 16);
+    line(0, -6, 10, 2);
+    line(0, 2, -10, 8);
+    noStroke();
 
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(w * 0.2);
-  textStyle(BOLD);
-  text('UNO', 0, 2);
-  textStyle(NORMAL);
+  } else if (name === 'YELLOW') {
+    // Sun
+    fill(255, 220, 50);
+    ellipse(0, 0, 30, 30);
+    // Rays
+    for (let a = 0; a < TWO_PI; a += TWO_PI / 8) {
+      fill(255, 200, 40);
+      push();
+      rotate(a);
+      rect(0, -24, 6, 10, 3);
+      pop();
+    }
+    // Sun center shine
+    fill(255, 240, 120);
+    ellipse(0, 0, 20, 20);
+    fill(255, 255, 200, 180);
+    ellipse(-4, -4, 8, 8);
+  }
 
   pop();
 }
 
-// ── Overlay elements ─────────────────────────────────────────────
-function drawColorPicker() {
-  // Dim background
-  fill(0, 0, 0, 180);
-  noStroke();
-  rect(width / 2, height / 2, width, height);
-
-  // Panel
-  fill(40, 40, 50);
-  rect(width / 2, height / 2, 280, 200, 20);
-
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(18);
-  textStyle(BOLD);
-  text('Choose a Color', width / 2, height / 2 - 70);
-  textStyle(NORMAL);
-
-  let bx = width / 2, by = height / 2;
-  let offsets = [[-80, -30], [80, -30], [-80, 30], [80, 30]];
-  let names   = COLOR_PICKER_OPTIONS;
-
-  for (let i = 0; i < 4; i++) {
-    let px = bx + offsets[i][0];
-    let py = by + offsets[i][1];
-    let col = CARD_COLORS[names[i]];
-    let hov = dist(mouseX, mouseY, px, py) < 36;
-
-    fill(col[0], col[1], col[2]);
-    stroke(255);
-    strokeWeight(hov ? 3 : 1);
-    ellipse(px, py, hov ? 76 : 68, hov ? 76 : 68);
-    noStroke();
-
-    fill(255);
-    textSize(11);
-    text(names[i], px, py);
-  }
-}
-
 function drawError() {
-  fill(220, 50, 50, 220);
-  noStroke();
-  rect(width / 2, height - 18, 500, 28, 8);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(13);
-  text('⚠ ' + errorMsg, width / 2, height - 18);
+  fill(200,40,40,210); noStroke();
+  rect(width/2, height-16, 560, 26, 7);
+  fill(255); textAlign(CENTER,CENTER); textSize(12);
+  text('⚠  ' + errorMsg, width/2, height-16);
 }
 
 function drawLoadingOverlay() {
-  fill(0, 0, 0, 140);
-  noStroke();
-  rect(width / 2, height / 2, 300, 60, 16);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(18);
-  text(loadingMsg, width / 2, height / 2);
+  fill(0,0,0,150); noStroke();
+  rect(width/2, height/2, 320, 62, 16);
+  fill(255); textAlign(CENTER,CENTER); textSize(18);
+  text(loadingMsg, width/2, height/2);
 }
 
 function drawUnoFlash() {
   unoFlash--;
-  let alpha = map(unoFlash, 0, 90, 0, 255);
-  let scale = map(unoFlash, 90, 60, 1.4, 1.0);
-
+  let a = map(unoFlash, 0, 100, 0, 255);
+  let sc = unoFlash > 80 ? map(unoFlash, 100, 80, 1.6, 1.0) : 1.0;
   push();
-  translate(width / 2, height / 2 + 148);
-  scale(max(scale, 1.0));
-  fill(220, 45, 45, alpha);
+  translate(width/2, height/2+150); scale(sc);
+  fill(220,45,45,a); noStroke(); rect(0,0,180,62,31);
+  fill(255,a); textAlign(CENTER,CENTER); textSize(30); textStyle(BOLD);
+  text('UNO!', 0, 0); textStyle(NORMAL);
+  pop();
+}
+
+function drawOpponentPeek() {
+  if (!opponentPeek) return;
+  peekTimer = max(peekTimer - 1, 0);
+  let col = CARD_COLORS[opponentPeek.color] || [80, 80, 80];
+  let pulse = 0.5 + 0.5 * sin(frameCount * 0.15);
+  let glowSize = 130 + pulse * 20;
+  for (let r = glowSize; r > 0; r -= 12) {
+    let a = map(r, 0, glowSize, 120, 0) * pulse;
+    fill(col[0], col[1], col[2], a); noStroke();
+    ellipse(width/2, 210, r * 1.1, r);
+  }
+  fill(255); textAlign(CENTER,CENTER); textSize(14); textStyle(BOLD);
+  text('Opponent plays…', width/2, 130); textStyle(NORMAL);
+  let floatY = sin(frameCount * 0.12) * 5;
+  drawUnoCard(width/2, 210 + floatY, 90, 130, col, opponentPeek.label);
+  noFill();
+  stroke(255, 220, 80, 180 + pulse * 75);
+  strokeWeight(3 + pulse * 2);
+  rect(width/2, 210 + floatY, 96, 136, 15);
   noStroke();
-  rect(0, 0, 160, 60, 30);
-  fill(255, alpha);
+}
+
+// ── Drawn icon replacements for emojis ───────────────────────────
+function drawTrophy(x, y, size, alpha) {
+  push(); translate(x, y);
   textAlign(CENTER, CENTER);
-  textSize(28);
-  textStyle(BOLD);
-  text('UNO!', 0, 0);
+  // Bold gold star — simple, readable, no rendering issues
+  fill(0, alpha * 0.5); textSize(size * 1.1); textStyle(BOLD);
+  text('*', 3, 3); // shadow
+  fill(255, 200, 30, alpha); textSize(size * 1.1); textStyle(BOLD);
+  text('*', 0, 0);
   textStyle(NORMAL);
   pop();
+}
+
+function drawSkull(x, y, size, alpha) {
+  push(); translate(x, y);
+  textAlign(CENTER, CENTER);
+  // Bold red X — simple, readable, no rendering issues
+  fill(0, alpha * 0.5); textSize(size * 1.1); textStyle(BOLD);
+  text('X', 3, 3); // shadow
+  fill(220, 55, 55, alpha); textSize(size * 1.1); textStyle(BOLD);
+  text('X', 0, 0);
+  textStyle(NORMAL);
+  pop();
+}
+
+function drawOpponentSkipAnimation() {
+  oppSkipAnim++;
+  let totalFrames = 180; // 3 seconds at 60fps
+  let alpha;
+  if      (oppSkipAnim < 15)                  alpha = map(oppSkipAnim, 0, 15, 0, 255);
+  else if (oppSkipAnim > totalFrames - 15)     alpha = map(oppSkipAnim, totalFrames-15, totalFrames, 255, 0);
+  else                                         alpha = 255;
+
+  if (oppSkipAnim >= totalFrames) { oppSkipAnim = 0; return; }
+
+  let cx = width/2, cy = 250; // just below opponent profile area
+
+  fill(20, 20, 30, alpha * 0.85); noStroke();
+  rect(cx, cy, 290, 44, 22);
+  noFill(); stroke(240, 160, 40, alpha); strokeWeight(1.5);
+  rect(cx, cy, 290, 44, 22); noStroke();
+  fill(255, 210, 80, alpha);
+  textAlign(CENTER, CENTER); textSize(16); textStyle(BOLD);
+  text('Opponent turn skipped!', cx, cy);
+  textStyle(NORMAL);
+}
+
+function drawOpponentDrawAnimation() {
+  oppDrawAnim++;
+  let totalFrames = 120; // 2 seconds at 60fps
+  let alpha;
+  if      (oppDrawAnim < 15)                  alpha = map(oppDrawAnim, 0, 15, 0, 255);
+  else if (oppDrawAnim > totalFrames - 15)     alpha = map(oppDrawAnim, totalFrames-15, totalFrames, 255, 0);
+  else                                         alpha = 255;
+
+  if (oppDrawAnim >= totalFrames) { oppDrawAnim = 0; return; }
+
+  let cx = width/2, cy = 250; // just below opponent profile area
+
+  fill(20, 20, 30, alpha * 0.85); noStroke();
+  rect(cx, cy, 290, 44, 22);
+  noFill(); stroke(100, 160, 240, alpha); strokeWeight(1.5);
+  rect(cx, cy, 290, 44, 22); noStroke();
+  fill(160, 210, 255, alpha);
+  textAlign(CENTER, CENTER); textSize(16); textStyle(BOLD);
+  text('Opponent draws a card!', cx, cy);
+  textStyle(NORMAL);
+}
+
+function drawSkipAnimation() {
+  skipAnim++;
+
+  // Fade in over first 20 frames, hold, fade out over last 20 frames
+  // Total ~120 frames = 2 seconds at 60fps
+  let totalFrames = 120;
+  let alpha;
+  if (skipAnim < 20)                        alpha = map(skipAnim, 0, 20, 0, 255);
+  else if (skipAnim > totalFrames - 20)     alpha = map(skipAnim, totalFrames-20, totalFrames, 255, 0);
+  else                                      alpha = 255;
+
+  // Dark overlay
+  fill(0, 0, 0, alpha * 0.75);
+  noStroke();
+  rect(width/2, height/2, width, height);
+
+  let cx = width/2, cy = height/2;
+
+  // Pulsing red circle behind the symbol
+  let pulse = 0.5 + 0.5 * sin(skipAnim * 0.18);
+  for (let r = 260; r > 0; r -= 22) {
+    let a = map(r, 0, 260, alpha * 0.35, 0);
+    fill(220, 50, 50, a);
+    ellipse(cx, cy - 30, r * (1 + pulse * 0.04), r * (1 + pulse * 0.04));
+  }
+
+  // Big ⊘ symbol
+  let symScale = skipAnim < 15 ? map(skipAnim, 0, 15, 2.0, 1.0) : 1.0;
+  push();
+  translate(cx, cy - 30);
+  scale(symScale);
+
+  // Outer red circle
+  fill(220, 50, 50, alpha);
+  ellipse(0, 0, 180, 180);
+
+  // White inner ring
+  fill(255, alpha);
+  ellipse(0, 0, 155, 155);
+
+  // Red inner circle
+  fill(220, 50, 50, alpha);
+  ellipse(0, 0, 120, 120);
+
+  // White diagonal slash
+  fill(255, alpha);
+  push();
+  rotate(PI / 4);
+  rect(0, 0, 30, 170, 8);
+  pop();
+
+  pop();
+
+  // "TURN SKIPPED" headline
+  let txtScale = skipAnim < 15 ? map(skipAnim, 0, 15, 0.3, 1.0) : 1.0;
+  push();
+  translate(cx, cy + 90);
+  scale(txtScale);
+  textAlign(CENTER, CENTER);
+
+  // Shadow
+  fill(0, alpha * 0.6);
+  textSize(58); textStyle(BOLD);
+  text('TURN SKIPPED', 3, 3);
+
+  // Main text
+  fill(255, alpha);
+  textSize(58); textStyle(BOLD);
+  text('TURN SKIPPED', 0, 0);
+  textStyle(NORMAL);
+  pop();
+
+  // Subtitle — explains why
+  fill(220, 180, 180, alpha * 0.9);
+  textAlign(CENTER, CENTER);
+  textSize(18);
+  let topCard = state && state.topCard ? state.topCard : null;
+  let reason = 'Your turn has been skipped!';
+  if (topCard) {
+    if (topCard.label === '+4') reason = 'Hit by a Wild +4 — drawing 4 cards and losing your turn!';
+    else if (topCard.label === '+2') reason = 'Hit by a Draw Two — drawing 2 cards and losing your turn!';
+    else if (topCard.label === '⊘') reason = 'Hit by a Skip card — losing your turn!';
+    else if (topCard.label === '↻') reason = 'Hit by a Reverse — losing your turn!';
+  }
+  text(reason, cx, cy + 148);
+}
+
+function drawWinScreen() {
+  winnerAnim++;
+  let isWin = (winner === 'player');
+
+  // Simple fade in over 40 frames — one solid rect, no row loops
+  let fadeAlpha = constrain(map(winnerAnim, 0, 40, 0, 230), 0, 230);
+  noStroke();
+  if (isWin) {
+    fill(10, 10, 35, fadeAlpha);
+  } else {
+    fill(28, 6, 6, fadeAlpha);
+  }
+  rect(width/2, height/2, width, height);
+
+  // Wait until mostly faded in before drawing content
+  if (winnerAnim < 15) return;
+  let contentAlpha = constrain(map(winnerAnim, 15, 50, 0, 255), 0, 255);
+
+  let cx = width/2, cy = height/2 - 40;
+
+  // Starburst lines
+  strokeWeight(1); noFill();
+  for (let a = 0; a < TWO_PI; a += TWO_PI / 24) {
+    let len = map(sin(winnerAnim * 0.04 + a), -1, 1, 80, 220);
+    stroke(isWin ? color(255, 210, 60, contentAlpha * 0.3)
+                 : color(200, 60, 60, contentAlpha * 0.25));
+    line(cx, cy, cx + cos(a)*len, cy + sin(a)*len);
+  }
+  noStroke();
+
+  // Single glow circle — one ellipse with alpha, no loop
+  let pulse = 0.97 + 0.03 * sin(winnerAnim * 0.07);
+  fill(isWin ? color(255, 200, 50, contentAlpha * 0.18)
+             : color(200, 50, 50, contentAlpha * 0.18));
+  ellipse(cx, cy, 280 * pulse, 280 * pulse);
+  fill(isWin ? color(255, 200, 50, contentAlpha * 0.12)
+             : color(200, 50, 50, contentAlpha * 0.12));
+  ellipse(cx, cy, 200 * pulse, 200 * pulse);
+
+  // Trophy or skull
+  let bounce = isWin ? -abs(sin(winnerAnim * 0.06)) * 14 : 0;
+  if (isWin) {
+    drawTrophy(cx, cy - 60 + bounce, 80, contentAlpha);
+  } else {
+    drawSkull(cx, cy - 60, 80, contentAlpha);
+  }
+
+  // Headline
+  push();
+  translate(cx, cy + 30);
+  let headScale = constrain(map(winnerAnim, 15, 45, 0.5, 1.0), 0.5, 1.0);
+  scale(headScale);
+  textAlign(CENTER, CENTER);
+  fill(0, contentAlpha * 0.6); textSize(62); textStyle(BOLD);
+  text(isWin ? 'YOU WIN!' : 'YOU LOSE', 3, 3);
+  fill(isWin ? color(map(sin(winnerAnim*0.08),-1,1,200,255), 200, 40, contentAlpha)
+             : color(210, 55, 55, contentAlpha));
+  textSize(62); textStyle(BOLD);
+  text(isWin ? 'YOU WIN!' : 'YOU LOSE', 0, 0);
+  textStyle(NORMAL);
+  pop();
+
+  // Subtitle
+  fill(isWin ? color(255, 235, 150, contentAlpha)
+             : color(200, 200, 200, contentAlpha));
+  textAlign(CENTER, CENTER); textSize(18);
+  text(isWin ? 'Congratulations — all cards played!'
+             : 'The opponent played all their cards.', cx, cy + 88);
+
+  // Confetti particles — win only
+  if (isWin && winnerAnim % 8 === 0 && winnerAnim < 300) spawnParticles(3);
+
+  // Play Again button
+  let btnY = cy + 148;
+  let btnAlpha = constrain(map(winnerAnim, 35, 55, 0, 255), 0, 255);
+  let btnHov = dist(mouseX, mouseY, cx, btnY) < 80;
+  if (btnHov) { fill(255, 255, 255, 25); noStroke(); ellipse(cx, btnY, 220, 80); }
+  fill(isWin ? color(34, 160, 90, btnAlpha) : color(55, 55, 170, btnAlpha));
+  noStroke(); rect(cx, btnY, btnHov ? 196 : 184, btnHov ? 58 : 54, 28);
+  fill(255, btnAlpha); textSize(20); textStyle(BOLD);
+  text('▶  Play Again', cx, btnY);
+  textStyle(NORMAL);
 }

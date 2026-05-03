@@ -309,7 +309,10 @@ class Opponent extends Player {
             count.put(c.getColor(), count.getOrDefault(c.getColor(), 0) + 1);
         }
 
-        Card.Color mostCommon = Card.Color.RED;
+        // Default to RED if hand is all black cards — never return BLACK
+        // since changeColor() will silently fail if given BLACK
+        Card.Color[] nonBlack = {Card.Color.RED, Card.Color.BLUE, Card.Color.GREEN, Card.Color.YELLOW};
+        Card.Color mostCommon = nonBlack[(int)(Math.random() * 4)]; // random non-black fallback
         int max = 0;
 
         for (HashMap.Entry<Card.Color, Integer> entry : count.entrySet()) {
@@ -360,6 +363,11 @@ class UnoGame {
     }
 
     private void init() {
+        // Full reset — fresh deck, empty discard, turn counter back to 0
+        DrawPile    = new Deck();
+        DiscardPile = new ArrayList<>();
+        turnNumber  = 0;
+        ongoing     = true;
         playerList.clear();
         // Initialize players
         Player player = new Player();
@@ -369,8 +377,8 @@ class UnoGame {
         Random r = new Random();
         boolean playerFirst = (1 == r.nextInt(2));
 
-        if (playerFirst) { playerList.addAll(Arrays.asList(opponent, player)); }
-        else { playerList.addAll(Arrays.asList(player, opponent)); }
+        if (playerFirst) { playerList.addAll(Arrays.asList(player, opponent)); }
+        else { playerList.addAll(Arrays.asList(opponent, player)); }
 
         // Deal 7 cards to each player
         for (Player p : playerList) {
@@ -428,17 +436,11 @@ class UnoGame {
         turnNumber++;
     }
 
-    // Displays who won and exits the application
+    // Displays who won — when running as a server, just mark the game over and return.
+    // System.exit() is intentionally removed so the HTTP server stays alive for a new game.
     public void finishGame(Player Winner) {
         ongoing = false;
-
         UnoApp.displayWinner(Winner, turnNumber);
-
-        // Wait 10 seconds
-        try { Thread.sleep(10000); }
-        catch(InterruptedException e) { Thread.currentThread().interrupt(); }
-        
-        System.exit(0);
     }
 
     public void applyCardEffects(Card card) {
@@ -460,11 +462,16 @@ class UnoGame {
         }
 
         if (card.getColor() == Card.Color.BLACK) {
-            // Use API callback if available, otherwise fall back to console prompt
-            if (colorChangeCallback != null) {
+            Player current = getCurrentPlayer();
+            if (current instanceof Opponent) {
+                // Opponent always picks their own color automatically
+                current.changeCardColor(card);
+            } else if (colorChangeCallback != null) {
+                // Human playing via API — show color picker in UI
                 colorChangeCallback.onColorChangeNeeded(card);
             } else {
-                getCurrentPlayer().changeCardColor(card);
+                // Human playing via console
+                current.changeCardColor(card);
             }
         }
 

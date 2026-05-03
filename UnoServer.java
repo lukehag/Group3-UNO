@@ -29,16 +29,20 @@ public class UnoServer {
     static UnoGame game;
     static boolean awaitingColorChoice = false;
     static Card pendingBlackCard = null;
+    static Card pendingOpponentCard = null; // card opponent is about to play (for animation)
+    static boolean opponentWillDraw = false; // true if opponent has no playable card
 
     public static void main(String[] args) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
 
-        server.createContext("/new-game",     new NewGameHandler());
-        server.createContext("/state",        new StateHandler());
-        server.createContext("/play-card",    new PlayCardHandler());
-        server.createContext("/draw-card",    new DrawCardHandler());
-        server.createContext("/end-turn",     new EndTurnHandler());
-        server.createContext("/choose-color", new ChooseColorHandler());
+        server.createContext("/new-game",        new NewGameHandler());
+        server.createContext("/state",           new StateHandler());
+        server.createContext("/play-card",       new PlayCardHandler());
+        server.createContext("/draw-card",       new DrawCardHandler());
+        server.createContext("/end-turn",        new EndTurnHandler());
+        server.createContext("/choose-color",    new ChooseColorHandler());
+        server.createContext("/peek-opponent",   new PeekOpponentHandler());
+        server.createContext("/commit-opponent", new CommitOpponentHandler());
 
         server.setExecutor(null);
         server.start();
@@ -169,6 +173,41 @@ public class UnoServer {
         );
     }
 
+    // Run the opponent turn immediately (used at game start when opponent goes first)
+    static void runOpponentNow() {
+        if (!game.isOngoing()) return;
+        if (!(game.getCurrentPlayer() instanceof Opponent opp)) return;
+        opp.takeTurn(game);
+        if (game.isOngoing()) game.nextTurn();
+    }
+
+    // Stage the opponent's intended move without applying it yet.
+    // Returns true if there is a move to preview, false if opponent is skipped or draws.
+    static boolean stageOpponentMove() {
+        if (!game.isOngoing()) return false;
+        if (!(game.getCurrentPlayer() instanceof Opponent opp)) return false;
+
+        // If opponent is skipped, just advance the turn immediately — nothing to preview
+        if (opp.isSkipped()) {
+            opp.resumePlayer();
+            opp.resetDraw();
+            if (game.isOngoing()) game.nextTurn();
+            return false;
+        }
+
+        List<Card> playable = opp.getPlayable(game.getTopCard());
+        if (playable.isEmpty()) {
+            // Opponent has nothing to play — no card to highlight, just commit immediately
+            pendingOpponentCard = null;
+            opponentWillDraw = true;
+            return false;
+        }
+
+        pendingOpponentCard = opp.findBestCard(playable, game.getTopCard());
+        opponentWillDraw = false;
+        return true;
+    }
+
     // ── Handlers ────────────────────────────────────────────────────────────
 
     static class NewGameHandler implements HttpHandler {
@@ -177,6 +216,10 @@ public class UnoServer {
             game = new UnoGame(UnoServer::onColorChangeNeeded);
             awaitingColorChoice = false;
             pendingBlackCard = null;
+            pendingOpponentCard = null;
+            opponentWillDraw = false;
+            // If opponent goes first, run their turn immediately (no preview at game start)
+            runOpponentNow();
             send(ex, 200, buildState());
         }
     }
@@ -213,7 +256,21 @@ public class UnoServer {
             game.discardCard(curr.playCard(idx));
             game.applyCardEffects(chosen);
 
-            // If game ended via applyCardEffects (player has no cards), state will reflect it
+            if (!game.isOngoing()) { send(ex, 200, buildState()); return; }
+            if (awaitingColorChoice) { send(ex, 200, buildState()); return; }
+
+            // Advance past the player's turn
+            game.nextTurn();
+
+            // Stage the opponent's move — client will animate then call /commit-opponent
+            if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
+                boolean hasCard = stageOpponentMove();
+                if (!hasCard) {
+                    // Opponent draws — no preview needed, commit immediately
+                    runOpponentNow();
+                }
+            }
+
             send(ex, 200, buildState());
         }
     }
@@ -229,7 +286,17 @@ public class UnoServer {
             if (curr.isSkipped())         { send(ex, 400, "{\"error\":\"You are skipped\"}"); return; }
 
             curr.choseDraw();
-            curr.drawCard(game.takeCard());
+            Card drawn = game.takeCard();
+            curr.drawCard(drawn);
+
+            // If drawn card isn't playable, auto-advance and stage opponent move
+            if (!drawn.isMatching(game.getTopCard())) {
+                game.nextTurn();
+                if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
+                    boolean hasCard = stageOpponentMove();
+                    if (!hasCard) runOpponentNow();
+                }
+            }
             send(ex, 200, buildState());
         }
     }
@@ -239,15 +306,57 @@ public class UnoServer {
             if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
             if (game == null) { send(ex, 400, "{\"error\":\"No game in progress\"}"); return; }
 
-            Player curr = game.getCurrentPlayer();
-
-            // Advance turn, then let opponent take theirs automatically
             game.nextTurn();
 
-            if (game.getCurrentPlayer() instanceof Opponent opp) {
-                opp.takeTurn(game);
-                game.nextTurn();
+            if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
+                boolean hasCard = stageOpponentMove();
+                if (!hasCard) runOpponentNow();
             }
+
+            send(ex, 200, buildState());
+        }
+    }
+
+    // Client calls this to get the card the opponent is about to play (for the highlight animation)
+    static class PeekOpponentHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            if (pendingOpponentCard == null) {
+                send(ex, 200, "{\"pending\":false}"); return;
+            }
+            send(ex, 200, String.format(
+                "{\"pending\":true,\"card\":%s}",
+                cardToJson(pendingOpponentCard)
+            ));
+        }
+    }
+
+    // Client calls this after the highlight animation to actually apply the opponent's move
+    static class CommitOpponentHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            if (game == null) { send(ex, 400, "{\"error\":\"No game\"}"); return; }
+            if (pendingOpponentCard == null) {
+                send(ex, 400, "{\"error\":\"No pending opponent move\"}"); return;
+            }
+
+            Opponent opp = (Opponent) game.getCurrentPlayer();
+
+            // Find and play the staged card
+            int cardIdx = opp.getHand().getList().indexOf(pendingOpponentCard);
+            if (cardIdx == -1) {
+                // Fallback: card not found, just run normally
+                pendingOpponentCard = null;
+                runOpponentNow();
+                send(ex, 200, buildState()); return;
+            }
+
+            game.discardCard(opp.playCard(cardIdx));
+            game.applyCardEffects(pendingOpponentCard);
+            pendingOpponentCard = null;
+            opponentWillDraw = false;
+
+            if (game.isOngoing()) game.nextTurn();
 
             send(ex, 200, buildState());
         }
@@ -275,10 +384,13 @@ public class UnoServer {
             awaitingColorChoice = false;
             pendingBlackCard = null;
 
-            // If it's now the opponent's turn (e.g., after a Wild Draw Four), let them go
-            if (game.getCurrentPlayer() instanceof Opponent opp) {
-                opp.takeTurn(game);
-                game.nextTurn();
+            // Advance past the player's turn now that color is chosen
+            game.nextTurn();
+
+            // Stage or run opponent
+            if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
+                boolean hasCard = stageOpponentMove();
+                if (!hasCard) runOpponentNow();
             }
 
             send(ex, 200, buildState());
