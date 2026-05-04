@@ -12,7 +12,7 @@ this link will automatically download Full JDK 21 on your device. Make sure when
 5. uno_ui_p5_sketch.js
 
 
-make sure all of those files are in the same folderbefore heading over to the Terminal. Once you open the terminal, write the following in the command line:
+make sure all of those files are in the same folder before heading over to the Terminal. Once you open the terminal, write the following in the command line:
 
 1. Navigate to the same folder as all your files.
 2. your JDK 21 file should be here "C:\Program Files\BellSoft\LibericaJDK-21-Full\bin\javac.exe". double check to make sure its there. 
