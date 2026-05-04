@@ -10,6 +10,7 @@ this link will automatically download Full JDK 21 on your device. Make sure when
 3. UnoLauncher.java
 4. index.html
 5. uno_ui_p5_sketch.js
+6. p5.min.js
 
 
 make sure all of those files are in the same folder before heading over to the Terminal. Once you open the terminal, write the following in the command line:
