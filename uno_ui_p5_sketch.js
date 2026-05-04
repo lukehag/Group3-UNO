@@ -154,9 +154,15 @@ function draw() {
       skipAnim = 1;
       setTimeout(() => {
         skipAnim = 0;
-        skipTriggered = false;
         endTurnAfterSkip();
+        // Note: skipTriggered stays true until state is no longer SKIPPED
+        // It gets reset in newGame() or when state.status changes
       }, 2500);
+    }
+
+    // Reset skipTriggered once state is no longer SKIPPED
+    if (state.status !== 'SKIPPED' && skipTriggered && skipAnim === 0) {
+      skipTriggered = false;
     }
   }
 
@@ -264,7 +270,15 @@ function peekThenCommit(s) {
   if (s.opponentDrew) {
     oppDrawAnim = 1;
     fetch(getAPI() + '/clear-drew', { method: 'POST' });
-    setTimeout(() => { oppDrawAnim = 0; checkUno(s); }, 2500);
+    setTimeout(() => {
+      oppDrawAnim = 0;
+      // Fetch fresh state so turn status updates properly
+      fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
+        state = ns;
+        if (!ns.ongoing) { detectWinner(ns); return; }
+        checkUno(ns);
+      });
+    }, 2500);
     return;
   }
 
@@ -272,7 +286,15 @@ function peekThenCommit(s) {
   if (s.opponentWasSkipped) {
     oppSkipAnim = 1;
     fetch(getAPI() + '/clear-skip', { method: 'POST' });
-    setTimeout(() => { oppSkipAnim = 0; }, 2500);
+    setTimeout(() => {
+      oppSkipAnim = 0;
+      // Fetch fresh state so turn status updates properly
+      fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
+        state = ns;
+        if (!ns.ongoing) { detectWinner(ns); return; }
+        checkUno(ns);
+      });
+    }, 2500);
     return;
   }
 
@@ -296,8 +318,25 @@ function peekThenCommit(s) {
         peekTimer = 0;
         apiPost('/commit-opponent', {}, ns => {
           state = ns;
-          if (!ns.ongoing) { detectWinner(ns); return; }
-          // Check for drew/skip on the committed state without recursing into peek again
+          if (!ns.ongoing) {
+            setTimeout(() => { detectWinner(ns); }, 800);
+            return;
+          }
+          // If it's still the opponent's turn (e.g. played a Wild), peek again
+          if (!ns.isPlayerTurn) {
+            state = ns;
+            // Fetch fresh state first to make sure server has staged the next card
+            setTimeout(() => {
+              fetch(getAPI() + '/state').then(r => r.json()).then(fresh => {
+                state = fresh;
+                if (!fresh.isPlayerTurn && fresh.ongoing) {
+                  peekThenCommit(fresh);
+                }
+              });
+            }, 800);
+            return;
+          }
+          // Check for drew/skip flags
           if (ns.opponentDrew || ns.opponentWasSkipped) {
             peekThenCommit(ns);
           }
@@ -722,7 +761,7 @@ function drawCardBack(x, y, w=80, h=120) {
   push(); translate(x,y); noStroke();
   fill(22,22,38); rect(0,0,w,h,13);
   fill(190,35,35); rect(0,0,w-10,h-10,10);
-  fill(255,210); ellipse(0,0,w*0.6,h*0.35);
+  fill(255, 235, 120, 200); ellipse(0,0,w*0.6,h*0.35);
   fill(255); textAlign(CENTER,CENTER);
   textSize(w * 0.26); textStyle(BOLD);
   text('UNO',0, w * 0.03); textStyle(NORMAL);

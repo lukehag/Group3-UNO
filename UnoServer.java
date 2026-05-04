@@ -365,17 +365,40 @@ public class UnoServer {
             int cardIdx = opp.getHand().getList().indexOf(pendingOpponentCard);
             if (cardIdx == -1) {
                 // Fallback: card not found, just run normally
+                System.out.println("[DEBUG] cardIdx == -1! pendingOpponentCard=" + pendingOpponentCard + " hand=" + opp.getHand().getList());
                 pendingOpponentCard = null;
                 runOpponentNow();
                 send(ex, 200, buildState()); return;
             }
+            System.out.println("[DEBUG] cardIdx=" + cardIdx + " playing: " + pendingOpponentCard);
 
+            Card playedCard = pendingOpponentCard;
             game.discardCard(opp.playCard(cardIdx));
-            game.applyCardEffects(pendingOpponentCard);
+            game.applyCardEffects(playedCard);
             pendingOpponentCard = null;
             opponentWillDraw = false;
+            opponentDrewLastTurn = false;
+            opponentWasSkippedLastTurn = false;
 
-            if (game.isOngoing()) game.nextTurn();
+            if (!game.isOngoing()) { send(ex, 200, buildState()); return; }
+
+            // If opponent played a Wild, they get to play another card this turn
+            if (playedCard.getType() == Card.Type.WILD || playedCard.getType() == Card.Type.WILD_DRAW_FOUR) {
+                System.out.println("[DEBUG] Opponent played Wild. Top card now: " + game.getTopCard() + " color=" + game.getTopCard().getColor());
+                System.out.println("[DEBUG] Opponent hand size: " + opp.getHand().size());
+                for (Card c : opp.getHand().getList()) {
+                    System.out.println("[DEBUG]   hand card: " + c + " matches=" + c.isMatching(game.getTopCard()));
+                }
+                boolean hasCard = stageOpponentMove();
+                System.out.println("[DEBUG] stageOpponentMove=" + hasCard + " pendingCard=" + pendingOpponentCard);
+                if (!hasCard) {
+                    game.nextTurn();
+                }
+                send(ex, 200, buildState()); return;
+            }
+
+            // Normal card — advance turn
+            game.nextTurn();
 
             send(ex, 200, buildState());
         }
