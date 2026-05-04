@@ -31,6 +31,8 @@ public class UnoServer {
     static Card pendingBlackCard = null;
     static Card pendingOpponentCard = null; // card opponent is about to play (for animation)
     static boolean opponentWillDraw = false; // true if opponent has no playable card
+    static boolean opponentDrewLastTurn = false; // true if opponent drew on their last turn
+    static boolean opponentWasSkippedLastTurn = false; // true if opponent was skipped
 
     public static void main(String[] args) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
@@ -43,6 +45,9 @@ public class UnoServer {
         server.createContext("/choose-color",    new ChooseColorHandler());
         server.createContext("/peek-opponent",   new PeekOpponentHandler());
         server.createContext("/commit-opponent", new CommitOpponentHandler());
+        server.createContext("/clear-drew",      new ClearDrewHandler());
+        server.createContext("/clear-skip",      new ClearSkipHandler());
+        server.createContext("/",                new StaticFileHandler());
 
         server.setExecutor(null);
         server.start();
@@ -157,7 +162,9 @@ public class UnoServer {
             "\"playerCards\":%s," +
             "\"playerHasUno\":%b," +
             "\"opponentHasUno\":%b," +
-            "\"awaitingColorChoice\":%b" +
+            "\"awaitingColorChoice\":%b," +
+            "\"opponentDrew\":%b," +
+            "\"opponentWasSkipped\":%b" +
             "}",
             game.isOngoing(),
             status,
@@ -169,7 +176,9 @@ public class UnoServer {
             playerCards.toString(),
             human.hasUno(),
             opponent.hasUno(),
-            awaitingColorChoice
+            awaitingColorChoice,
+            opponentDrewLastTurn,
+            opponentWasSkippedLastTurn
         );
     }
 
@@ -191,17 +200,25 @@ public class UnoServer {
         if (opp.isSkipped()) {
             opp.resumePlayer();
             opp.resetDraw();
+            opponentWasSkippedLastTurn = true;
+            opponentDrewLastTurn = false;
             if (game.isOngoing()) game.nextTurn();
             return false;
         }
 
         List<Card> playable = opp.getPlayable(game.getTopCard());
         if (playable.isEmpty()) {
-            // Opponent has nothing to play — no card to highlight, just commit immediately
+            // Opponent has nothing to play — run their turn now and flag the draw
+            opponentDrewLastTurn = true;
+            opponentWasSkippedLastTurn = false;
+            opponentWillDraw = false;
             pendingOpponentCard = null;
-            opponentWillDraw = true;
+            runOpponentNow();
             return false;
         }
+
+        opponentWasSkippedLastTurn = false;
+        opponentDrewLastTurn = false;
 
         pendingOpponentCard = opp.findBestCard(playable, game.getTopCard());
         opponentWillDraw = false;
@@ -218,6 +235,8 @@ public class UnoServer {
             pendingBlackCard = null;
             pendingOpponentCard = null;
             opponentWillDraw = false;
+            opponentDrewLastTurn = false;
+            opponentWasSkippedLastTurn = false;
             // If opponent goes first, run their turn immediately (no preview at game start)
             runOpponentNow();
             send(ex, 200, buildState());
@@ -384,16 +403,54 @@ public class UnoServer {
             awaitingColorChoice = false;
             pendingBlackCard = null;
 
-            // Advance past the player's turn now that color is chosen
-            game.nextTurn();
+            // Don't advance the turn — player still gets to play after choosing a color
+            // Just return YOUR_TURN status so they can play another card or draw
+            send(ex, 200, buildState());
+        }
+    }
 
-            // Stage or run opponent
-            if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
-                boolean hasCard = stageOpponentMove();
-                if (!hasCard) runOpponentNow();
+    static class ClearDrewHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            opponentDrewLastTurn = false;
+            send(ex, 200, "{\"ok\":true}");
+        }
+    }
+
+    static class ClearSkipHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            opponentWasSkippedLastTurn = false;
+            send(ex, 200, "{\"ok\":true}");
+        }
+    }
+
+    // Serves static files (index.html, uno_ui_p5_sketch.js) so the WebView
+    // loads them over HTTP instead of file://, avoiding CORS issues
+    static class StaticFileHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            String path = ex.getRequestURI().getPath();
+            if (path.equals("/") || path.equals("/index.html")) path = "/index.html";
+
+            java.io.File file = new java.io.File("." + path);
+            if (!file.exists() || file.isDirectory()) {
+                ex.sendResponseHeaders(404, 0);
+                ex.getResponseBody().close();
+                return;
             }
 
-            send(ex, 200, buildState());
+            String contentType = "text/plain";
+            if (path.endsWith(".html"))     contentType = "text/html; charset=utf-8";
+            else if (path.endsWith(".js"))  contentType = "application/javascript; charset=utf-8";
+            else if (path.endsWith(".css")) contentType = "text/css; charset=utf-8";
+
+            byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+            ex.getResponseHeaders().set("Content-Type", contentType);
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            ex.sendResponseHeaders(200, bytes.length);
+            ex.getResponseBody().write(bytes);
+            ex.getResponseBody().close();
         }
     }
 

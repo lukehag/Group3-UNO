@@ -60,14 +60,19 @@ public class UnoLauncher extends Application {
         WebView webView = new WebView();
         WebEngine engine = webView.getEngine();
 
-        // Prefer loading index.html from disk so the sketch JS file can be
-        // used externally if desired. Falls back to localhost if not found.
-        File htmlFile = new File("index.html");
-        if (htmlFile.exists()) {
-            engine.load(htmlFile.toURI().toString());
-        } else {
-            engine.load("http://localhost:" + PORT);
-        }
+        // Always load over HTTP so API calls aren't blocked by CORS
+        engine.load("http://localhost:" + PORT + "/index.html");
+
+        // Log page load state changes for debugging
+        engine.getLoadWorker().stateProperty().addListener((obs, old, newState) -> {
+            System.out.println("WebView state: " + newState);
+            if (newState == javafx.concurrent.Worker.State.FAILED) {
+                System.out.println("WebView load FAILED: " + engine.getLoadWorker().getException());
+            }
+        });
+
+        // Log JS errors
+        engine.setOnError(e -> System.out.println("WebView error: " + e.getMessage()));
 
         // Allow JS console.log to show in Java stdout (handy for debugging)
         engine.setOnAlert(event -> System.out.println("[JS] " + event.getData()));
