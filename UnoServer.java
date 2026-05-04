@@ -47,6 +47,7 @@ public class UnoServer {
         server.createContext("/commit-opponent", new CommitOpponentHandler());
         server.createContext("/clear-drew",      new ClearDrewHandler());
         server.createContext("/clear-skip",      new ClearSkipHandler());
+        server.createContext("/force-end-turn",  new ForceEndTurnHandler());
         server.createContext("/",                new StaticFileHandler());
 
         server.setExecutor(null);
@@ -428,6 +429,30 @@ public class UnoServer {
 
             // Don't advance the turn — player still gets to play after choosing a color
             // Just return YOUR_TURN status so they can play another card or draw
+            send(ex, 200, buildState());
+        }
+    }
+
+    // Force-advances the turn regardless of state — used when timer expires
+    static class ForceEndTurnHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (ex.getRequestMethod().equals("OPTIONS")) { send(ex, 200, "{}"); return; }
+            if (game == null) { send(ex, 400, "{\"error\":\"No game\"}"); return; }
+
+            // Only force-end if it's actually the player's turn
+            if (game.getCurrentPlayer() instanceof Opponent) {
+                send(ex, 400, "{\"error\":\"Not player turn\"}"); return;
+            }
+
+            // Advance turn
+            game.nextTurn();
+
+            // Stage or run opponent move
+            if (game.isOngoing() && game.getCurrentPlayer() instanceof Opponent) {
+                boolean hasCard = stageOpponentMove();
+                if (!hasCard) runOpponentNow();
+            }
+
             send(ex, 200, buildState());
         }
     }

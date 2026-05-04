@@ -98,6 +98,7 @@ const COLOR_PICKER_OPTIONS = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
 // ── p5.js lifecycle ──────────────────────────────────────────────
 function setup() {
   let cnv = createCanvas(1200, 700);
+  cnv.parent('game-wrapper'); // attach inside game wrapper, not body
   cnv.style('max-width', '98vw');
   textFont('Georgia');
   rectMode(CENTER);
@@ -134,14 +135,8 @@ function draw() {
         turnTimer--;
         if (turnTimer <= 0) {
           turnTimer = 0;
-          if (state.status === 'HAS_DRAWN') endTurn();
-          else if (state.status === 'YOUR_TURN') {
-            apiPost('/draw-card', {}, s => {
-              state = s; errorMsg = '';
-              if (!s.ongoing) { detectWinner(s); return; }
-              endTurn();
-            });
-          }
+          turnTimerActive = false; // prevent re-firing
+          timerExpired();
         }
       }
     } else {
@@ -248,6 +243,35 @@ function endTurnAfterSkip() {
       checkUno(s);
     }, 1000);
   });
+}
+
+// Called when the 2-minute turn timer expires
+function timerExpired() {
+  if (!state) return;
+  turnTimer = 120;
+  loadingMsg = 'Time\'s up!';
+
+  if (state.status === 'HAS_DRAWN') {
+    // Already drew — just force end the turn
+    apiPost('/force-end-turn', {}, s => {
+      state = s; loadingMsg = '';
+      if (!s.ongoing) { detectWinner(s); return; }
+      peekThenCommit(s);
+      checkUno(s);
+    });
+  } else {
+    // YOUR_TURN — force draw then force end in sequence
+    apiPost('/draw-card', {}, s => {
+      state = s;
+      // Always force-end regardless of what came back
+      apiPost('/force-end-turn', {}, ns => {
+        state = ns; loadingMsg = '';
+        if (!ns.ongoing) { detectWinner(ns); return; }
+        peekThenCommit(ns);
+        checkUno(ns);
+      });
+    });
+  }
 }
 
 function chooseColor(colorName) {

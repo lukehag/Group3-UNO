@@ -15,6 +15,7 @@
       justify-content: center;
       min-height: 100vh;
       font-family: 'Segoe UI', sans-serif;
+      overflow: hidden;
     }
     canvas { display: block; border-radius: 18px; box-shadow: 0 8px 48px rgba(0,0,0,0.6); }
 
@@ -63,22 +64,243 @@
       font-size: 12px;
     }
     #server-url-form button:hover { background: #27886a; }
+
+    /* ── Start screen ── */
+    #start-screen {
+      position: fixed;
+      inset: 0;
+      background: #0a1f1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      gap: 0;
+      transition: opacity 0.6s ease;
+    }
+    #start-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Animated background cards */
+    #start-screen::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(220,55,55,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 50%, rgba(55,110,240,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 80%, rgba(55,180,90,0.06) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .start-logo {
+      font-size: clamp(5rem, 18vw, 12rem);
+      font-weight: 900;
+      font-family: 'Segoe UI Black', 'Arial Black', sans-serif;
+      letter-spacing: -4px;
+      background: linear-gradient(135deg, #dc3737 0%, #ff6b35 40%, #ffd700 70%, #dc3737 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      filter: drop-shadow(0 4px 24px rgba(220,55,55,0.4));
+      margin-bottom: 8px;
+      user-select: none;
+    }
+
+    .start-tagline {
+      color: rgba(255,255,255,0.4);
+      font-size: 0.9rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      margin-bottom: 60px;
+    }
+
+    /* Decorative card row */
+    .card-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 60px;
+    }
+    .deco-card {
+      width: 52px;
+      height: 78px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 1.4rem;
+      color: white;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      animation: float-card 3s ease-in-out infinite;
+    }
+    .deco-card:nth-child(1) { background: #dc3737; animation-delay: 0s; }
+    .deco-card:nth-child(2) { background: #3770f0; animation-delay: 0.3s; }
+    .deco-card:nth-child(3) { background: #37b45a; animation-delay: 0.6s; }
+    .deco-card:nth-child(4) { background: #f5c832; animation-delay: 0.9s; color: #333; }
+    .deco-card:nth-child(5) { background: #222; animation-delay: 1.2s; }
+
+    @keyframes float-card {
+      0%, 100% { transform: translateY(0px); }
+      50%       { transform: translateY(-10px); }
+    }
+
+    /* Server status on start screen */
+    .start-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 36px;
+      font-size: 0.8rem;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0.1em;
+    }
+    .start-status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #ff9800;
+      box-shadow: 0 0 8px #ff9800;
+      transition: all 0.3s;
+    }
+    .start-status-dot.ready {
+      background: #4caf50;
+      box-shadow: 0 0 8px #4caf50;
+      animation: pulse-green 2s ease-in-out infinite;
+    }
+    @keyframes pulse-green {
+      0%,100% { opacity: 1; } 50% { opacity: 0.5; }
+    }
+
+    /* Start button */
+    #start-btn {
+      background: linear-gradient(135deg, #dc3737, #c42020);
+      color: white;
+      border: none;
+      padding: 18px 64px;
+      border-radius: 50px;
+      font-size: 1.2rem;
+      font-weight: 700;
+      font-family: 'Segoe UI', sans-serif;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      box-shadow: 0 8px 32px rgba(220,55,55,0.4);
+      transition: transform 0.15s, box-shadow 0.15s, opacity 0.2s;
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    #start-btn.ready {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #start-btn.ready:hover {
+      transform: translateY(-3px) scale(1.03);
+      box-shadow: 0 14px 40px rgba(220,55,55,0.55);
+    }
+    #start-btn.ready:active {
+      transform: translateY(0) scale(0.98);
+    }
+
+    .start-hint {
+      margin-top: 20px;
+      font-size: 0.72rem;
+      color: rgba(255,255,255,0.25);
+      letter-spacing: 0.1em;
+    }
+
+    /* Game wrapper — hidden until start */
+    #game-wrapper {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+    }
+    #game-wrapper.visible {
+      display: flex;
+    }
   </style>
 </head>
 <body>
 
-<div id="status-bar">
-  <div>
-    <span id="conn-dot" class="waiting"></span>
-    <span id="conn-label">Connecting to UNO server…</span>
+<!-- ── Start screen ── -->
+<div id="start-screen">
+  <div class="start-logo">UNO</div>
+  <div class="start-tagline">Two Player Edition</div>
+
+  <div class="card-row">
+    <div class="deco-card">7</div>
+    <div class="deco-card">+2</div>
+    <div class="deco-card">↻</div>
+    <div class="deco-card">⊘</div>
+    <div class="deco-card">W</div>
   </div>
-  <form id="server-url-form" onsubmit="return false;">
-    <label style="color:#888">Server:</label>
-    <input id="api-input" type="text" value="http://localhost:8080" />
-    <button onclick="reconnect()">Connect</button>
-  </form>
+
+  <div class="start-status">
+    <div class="start-status-dot" id="start-dot"></div>
+    <span id="start-status-label">Connecting to server…</span>
+  </div>
+
+  <button id="start-btn" onclick="startGame()">▶ &nbsp; Start Game</button>
+  <div class="start-hint" id="start-hint">Waiting for server connection…</div>
 </div>
+
+<!-- ── Game ── -->
+<div id="game-wrapper">
+  <div id="status-bar">
+    <div>
+      <span id="conn-dot" class="waiting"></span>
+      <span id="conn-label">Connecting to UNO server…</span>
+    </div>
+    <form id="server-url-form" onsubmit="return false;">
+      <label style="color:#888">Server:</label>
+      <input id="api-input" type="text" value="http://localhost:8080" />
+      <button onclick="reconnect()">Connect</button>
+    </form>
+  </div>
+</div>
+
+<script>
+  let serverReady = false;
+
+  // Check server connection on load
+  function checkServer() {
+    fetch('http://localhost:8080/state')
+      .then(r => r.json())
+      .then(() => {
+        serverReady = true;
+        document.getElementById('start-dot').classList.add('ready');
+        document.getElementById('start-status-label').textContent = 'Server connected — ready to play!';
+        document.getElementById('start-btn').classList.add('ready');
+        document.getElementById('start-hint').textContent = 'Click to begin';
+      })
+      .catch(() => {
+        document.getElementById('start-status-label').textContent = 'Cannot reach server — retrying…';
+        setTimeout(checkServer, 2000);
+      });
+  }
+
+  function startGame() {
+    if (!serverReady) return;
+
+    const screen = document.getElementById('start-screen');
+    const wrapper = document.getElementById('game-wrapper');
+
+    screen.classList.add('hidden');
+    wrapper.classList.add('visible');
+
+    setTimeout(() => {
+      screen.style.display = 'none';
+    }, 650);
+  }
+
+  function reconnect() {
+    if (typeof newGame === 'function') newGame();
+  }
+
+  checkServer();
+</script>
 
 <script src="uno_ui_p5_sketch.js"></script>
 </body>
 </html>
+
