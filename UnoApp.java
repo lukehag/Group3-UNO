@@ -515,7 +515,7 @@ public class UnoApp {
 
             switch (Game.getCurrentPlayer()) {
                 case Opponent o -> o.takeTurn(Game);
-                case Player _ -> promptPlayer(Game);
+                case Player p -> promptPlayer(Game);
             }
         }
         input.close();
