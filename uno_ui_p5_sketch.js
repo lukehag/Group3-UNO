@@ -81,6 +81,7 @@ let skipAnim        = 0;     // counts up while skip screen is showing
 let skipTriggered   = false; // prevents endTurn firing multiple times
 let turnTimer       = 120;   // seconds remaining on player's turn
 let turnTimerActive = false; // only ticks during player's turn
+let timerFired      = false; // prevents timerExpired firing multiple times
 let oppSkipAnim     = 0;     // counts up when opponent's turn is skipped
 let prevOppSkipped  = false; // tracks previous skip state to detect transition
 let oppDrawAnim     = 0;     // counts up when opponent draws a card
@@ -98,11 +99,18 @@ const COLOR_PICKER_OPTIONS = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
 // ── p5.js lifecycle ──────────────────────────────────────────────
 function setup() {
   let cnv = createCanvas(1200, 700);
-  cnv.parent('game-wrapper'); // attach inside game wrapper, not body
+  cnv.parent('game-wrapper');
   cnv.style('max-width', '98vw');
   textFont('Georgia');
   rectMode(CENTER);
   newGame();
+}
+
+function windowResized() {
+  // Keep canvas proportional — max 1200x700, scale down if window is smaller
+  let w = min(windowWidth - 40, 1200);
+  let h = w * (700 / 1200);
+  resizeCanvas(w, h);
 }
 
 function draw() {
@@ -129,18 +137,19 @@ function draw() {
     // Timer
     let isActiveTurn = state.status === 'YOUR_TURN' || state.status === 'HAS_DRAWN';
     if (isActiveTurn && !colorPickerOpen) drawTurnTimer();
-    if (isActiveTurn && !colorPickerOpen) {
+    if (isActiveTurn && !colorPickerOpen && !timerFired) {
       turnTimerActive = true;
       if (frameCount % 60 === 0 && turnTimer > 0) {
         turnTimer--;
         if (turnTimer <= 0) {
           turnTimer = 0;
-          turnTimerActive = false; // prevent re-firing
+          turnTimerActive = false;
+          timerFired = true;
           timerExpired();
         }
       }
-    } else {
-      if (turnTimerActive) { turnTimer = 120; turnTimerActive = false; }
+    } else if (!isActiveTurn) {
+      turnTimer = 60; turnTimerActive = false; timerFired = false;
     }
 
     // Skip animation trigger
@@ -172,7 +181,7 @@ function newGame() {
   errorMsg = ''; loadingMsg = '';
   colorPickerOpen = false;
   skipAnim = 0; skipTriggered = false;
-  turnTimer = 120; turnTimerActive = false;
+  turnTimer = 60; turnTimerActive = false; timerFired = false;
   oppSkipAnim = 0; prevOppSkipped = false;
   oppDrawAnim = 0;
   unoWho = null;
@@ -218,13 +227,18 @@ function drawACard() {
 function endTurn() {
   if (!state) return;
   if (state.status !== 'HAS_DRAWN' && state.status !== 'SKIPPED') return;
-  turnTimer = 120; turnTimerActive = false;
+  turnTimer = 60; turnTimerActive = false; timerFired = false;
   loadingMsg = 'Opponent thinking…';
   apiPost('/end-turn', {}, s => {
     state = s; loadingMsg = '';
     if (!s.ongoing) { detectWinner(s); return; }
-    peekThenCommit(s);
-    checkUno(s);
+    // Fetch fresh state so stale opponentDrew/Skipped flags don't block the peek flow
+    fetch(getAPI() + '/state').then(r => r.json()).then(fresh => {
+      state = fresh;
+      if (!fresh.ongoing) { detectWinner(fresh); return; }
+      peekThenCommit(fresh);
+      checkUno(fresh);
+    });
   });
 }
 
@@ -232,15 +246,20 @@ function endTurn() {
 // delays peekThenCommit so opponent notifications don't overlap with the skip screen
 function endTurnAfterSkip() {
   if (!state) return;
-  turnTimer = 120; turnTimerActive = false;
+  turnTimer = 60; turnTimerActive = false; timerFired = false;
   loadingMsg = 'Opponent thinking…';
   apiPost('/end-turn', {}, s => {
     state = s; loadingMsg = '';
     if (!s.ongoing) { detectWinner(s); return; }
-    // Wait 800ms after skip screen clears before showing opponent notification
+    // Fetch fresh state after delay so stale opponentDrew/Skipped flags
+    // from previous turns don't interfere with the peek flow
     setTimeout(() => {
-      peekThenCommit(s);
-      checkUno(s);
+      fetch(getAPI() + '/state').then(r => r.json()).then(fresh => {
+        state = fresh;
+        if (!fresh.ongoing) { detectWinner(fresh); return; }
+        peekThenCommit(fresh);
+        checkUno(fresh);
+      });
     }, 1000);
   });
 }
@@ -248,30 +267,27 @@ function endTurnAfterSkip() {
 // Called when the 2-minute turn timer expires
 function timerExpired() {
   if (!state) return;
-  turnTimer = 120;
-  loadingMsg = 'Time\'s up!';
+  turnTimer = 60;
+  loadingMsg = "Time's up!";
 
-  if (state.status === 'HAS_DRAWN') {
-    // Already drew — just force end the turn
-    apiPost('/force-end-turn', {}, s => {
-      state = s; loadingMsg = '';
-      if (!s.ongoing) { detectWinner(s); return; }
-      peekThenCommit(s);
-      checkUno(s);
-    });
-  } else {
-    // YOUR_TURN — force draw then force end in sequence
-    apiPost('/draw-card', {}, s => {
-      state = s;
-      // Always force-end regardless of what came back
-      apiPost('/force-end-turn', {}, ns => {
-        state = ns; loadingMsg = '';
-        if (!ns.ongoing) { detectWinner(ns); return; }
-        peekThenCommit(ns);
-        checkUno(ns);
-      });
+  function afterExpiry() {
+    fetch(getAPI() + '/state').then(r => r.json()).then(fresh => {
+      state = fresh; loadingMsg = '';
+      if (!fresh.ongoing) { detectWinner(fresh); return; }
+      peekThenCommit(fresh);
+      checkUno(fresh);
     });
   }
+
+  // Always force-end regardless of current status
+  // Use fetch directly so we can handle both success and error the same way
+  fetch(getAPI() + '/force-end-turn', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+  .then(() => afterExpiry())  // success or error — always fetch fresh state
+  .catch(() => afterExpiry());
 }
 
 function chooseColor(colorName) {
@@ -280,8 +296,8 @@ function chooseColor(colorName) {
   apiPost('/choose-color', { color: colorName }, s => {
     state = s; loadingMsg = '';
     if (!s.ongoing) { detectWinner(s); return; }
-    // Still the player's turn — don't hand over to opponent
-    // Player can now play another card or draw
+    // Wild ends the player's turn — opponent goes next
+    peekThenCommit(s);
     checkUno(s);
   });
 }
@@ -290,13 +306,15 @@ function chooseColor(colorName) {
 function peekThenCommit(s) {
   if (!s.ongoing) return;
 
+  console.log('[PEEK] called — isPlayerTurn:', s.isPlayerTurn, 'opponentDrew:', s.opponentDrew, 'opponentWasSkipped:', s.opponentWasSkipped, 'status:', s.status);
+
   // ── Case 1: Server flagged opponent drew ─────────────────────
   if (s.opponentDrew) {
+    console.log('[PEEK] → opponent drew, showing notification');
     oppDrawAnim = 1;
     fetch(getAPI() + '/clear-drew', { method: 'POST' });
     setTimeout(() => {
       oppDrawAnim = 0;
-      // Fetch fresh state so turn status updates properly
       fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
         state = ns;
         if (!ns.ongoing) { detectWinner(ns); return; }
@@ -308,11 +326,11 @@ function peekThenCommit(s) {
 
   // ── Case 2: Server flagged opponent was skipped ───────────────
   if (s.opponentWasSkipped) {
+    console.log('[PEEK] → opponent was skipped, showing notification');
     oppSkipAnim = 1;
     fetch(getAPI() + '/clear-skip', { method: 'POST' });
     setTimeout(() => {
       oppSkipAnim = 0;
-      // Fetch fresh state so turn status updates properly
       fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
         state = ns;
         if (!ns.ongoing) { detectWinner(ns); return; }
@@ -322,16 +340,22 @@ function peekThenCommit(s) {
     return;
   }
 
-  // ── Case 3: It's still the opponent's turn — peek for a card ──
-  if (s.isPlayerTurn) return;
+  // ── Case 3: It's the player's turn — nothing to do ───────────
+  if (s.isPlayerTurn) {
+    console.log('[PEEK] → isPlayerTurn=true, returning early');
+    return;
+  }
 
+  console.log('[PEEK] → calling /peek-opponent');
   fetch(getAPI() + '/peek-opponent')
     .then(r => r.json())
     .then(peek => {
+      console.log('[PEEK] /peek-opponent response:', JSON.stringify(peek));
       if (!peek.pending) {
-        // Shouldn't normally reach here, but fetch fresh state as fallback
         fetch(getAPI() + '/state').then(r => r.json()).then(ns => {
           state = ns;
+          if (!ns.ongoing) { detectWinner(ns); return; }
+          checkUno(ns);
         });
         return;
       }
@@ -341,26 +365,23 @@ function peekThenCommit(s) {
         opponentPeek = null;
         peekTimer = 0;
         apiPost('/commit-opponent', {}, ns => {
-          state = ns;
+          console.log('[PEEK] /commit-opponent response — isPlayerTurn:', ns.isPlayerTurn, 'ongoing:', ns.ongoing);
           if (!ns.ongoing) {
-            setTimeout(() => { detectWinner(ns); }, 800);
+            setTimeout(() => { state = ns; detectWinner(ns); }, 800);
             return;
           }
-          // If it's still the opponent's turn (e.g. played a Wild), peek again
+          state = ns;
           if (!ns.isPlayerTurn) {
-            state = ns;
-            // Fetch fresh state first to make sure server has staged the next card
             setTimeout(() => {
               fetch(getAPI() + '/state').then(r => r.json()).then(fresh => {
                 state = fresh;
-                if (!fresh.isPlayerTurn && fresh.ongoing) {
-                  peekThenCommit(fresh);
-                }
+                if (!fresh.ongoing) { detectWinner(fresh); return; }
+                if (!fresh.isPlayerTurn) peekThenCommit(fresh);
+                else checkUno(fresh);
               });
             }, 800);
             return;
           }
-          // Check for drew/skip flags
           if (ns.opponentDrew || ns.opponentWasSkipped) {
             peekThenCommit(ns);
           }
@@ -640,7 +661,7 @@ function drawUnoButton() {
 function drawTurnTimer() {
   // Position closer to center — just left of the draw pile
   let cx = width/2 - 270, cy = height/2;
-  let pct = turnTimer / 120;
+  let pct = turnTimer / 60;
 
   // Always red, pulses faster when low
   let pulse = (pct < 0.2) ? 0.5 + 0.5 * sin(frameCount * 0.25) : 1.0;
